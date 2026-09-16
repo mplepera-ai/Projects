@@ -117,7 +117,7 @@
   .panel { display: none; }
   .panel.active { display: block; }
 
-  .field-row { display: grid; grid-template-columns: 220px 1fr; gap: 14px; align-items: center; margin-bottom: 12px; }
+  .field-row { display: grid; grid-template-columns: minmax(90px, 220px) 1fr; gap: 14px; align-items: center; margin-bottom: 12px; }
   .field-row label { font-size: 13px; color: #444; }
   .field-row input, .field-row select {
     font-family: var(--mono); font-size: 13px; padding: 7px 9px;
@@ -127,10 +127,11 @@
 
   .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 40px; }
 
-  .help-layout { display: flex; gap: 28px; align-items: flex-start; }
-  .help-fields { flex: 1 1 60%; min-width: 0; }
+  .help-layout { display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap; }
+  .help-fields { flex: 1 1 420px; min-width: 340px; }
   .help-sidebar {
-    flex: 0 0 300px; background: var(--paper-panel); border: 1px solid var(--line);
+    flex: 1 1 280px; min-width: 260px; max-width: 340px;
+    background: var(--paper-panel); border: 1px solid var(--line);
     padding: 16px 18px; font-size: 12.5px; line-height: 1.5; position: sticky; top: 20px;
   }
   .help-title { font-weight: 600; margin-bottom: 6px; color: var(--ink); font-size: 13px; }
@@ -138,6 +139,11 @@
   .help-block:last-child { margin-bottom: 0; }
   .h2-method-option { padding: 8px 10px; border-radius: 2px; margin-bottom: 6px; border: 1px solid var(--line); }
   .h2-method-option.active-method { background: var(--amber-bg); border-color: var(--amber); }
+
+  @media (max-width: 900px) {
+    .grid-2 { grid-template-columns: 1fr; }
+    .help-sidebar { position: static; max-width: none; }
+  }
 
   table { border-collapse: collapse; width: 100%; margin-bottom: 10px; background: var(--paper-panel); }
   th, td { border: 1px solid var(--line); padding: 6px 10px; font-size: 13px; text-align: left; }
@@ -218,9 +224,9 @@
   <nav class="rail">
     <div class="rail-brand"><strong>Cascade Rebuilt</strong>Stormwater routing &amp; permitting</div>
     <button data-tab="project" class="active"><span class="rail-num">01</span>Project</button>
-    <button data-tab="existing"><span class="rail-num">02</span>Existing Conditions</button>
-    <button data-tab="proposed"><span class="rail-num">03</span>Proposed Conditions</button>
-    <button data-tab="storage"><span class="rail-num">04</span>Storage &amp; Water Quality</button>
+    <button data-tab="storage"><span class="rail-num">02</span>Storage &amp; Water Quality</button>
+    <button data-tab="existing"><span class="rail-num">03</span>Existing Conditions</button>
+    <button data-tab="proposed"><span class="rail-num">04</span>Proposed Conditions</button>
     <button data-tab="run"><span class="rail-num">05</span>Run Model</button>
     <button data-tab="results"><span class="rail-num">06</span>Results</button>
     <button data-tab="reports"><span class="rail-num">07</span>Reports</button>
@@ -1039,24 +1045,18 @@ function renderStoragePanel() {
     <p class="section-note">Automatically uses the conservative (L2) equation when Ds&gt;Du or W&gt;2(Du+Ds), matching Section 22.</p>
     <div class="help-layout">
       <div class="help-fields">
-        <div class="grid-2">
-          <div>
-            <div class="field-row"><label>Control elevation (ft)</label><input data-ex="controlElevationFt" value="${s.exfiltration.controlElevationFt}"></div>
-            <div class="field-row"><label>Design water table (ft)</label><input data-ex="designWaterTableFt" value="${s.exfiltration.designWaterTableFt}"></div>
-            <div class="field-row"><label>Trench top elevation (ft)</label><input data-ex="trenchTopElevationFt" value="${s.exfiltration.trenchTopElevationFt}"></div>
-            <div class="field-row"><label>Trench bottom elevation (ft)</label><input data-ex="trenchBottomElevationFt" value="${s.exfiltration.trenchBottomElevationFt}"></div>
-            <div class="field-row"><label>Pipe invert elevation (ft)</label><input data-ex="pipeInvertElevationFt" value="${s.exfiltration.pipeInvertElevationFt}"></div>
-            <div class="field-row"><label>Lowest overflow elevation (ft)</label><input data-ex="lowestOverflowElevationFt" value="${s.exfiltration.lowestOverflowElevationFt}"></div>
-          </div>
-          <div>
-            <div class="field-row"><label>Design water surface (ft)</label><input data-ex="designWaterSurfaceFt" value="${s.exfiltration.designWaterSurfaceFt}"></div>
-            <div class="field-row"><label>Trench width, W (ft)</label><input data-ex="trenchWidthFt" value="${s.exfiltration.trenchWidthFt}"></div>
-            <div class="field-row"><label>Provided trench length (ft)</label><input data-ex="actualTrenchLengthFt" value="${s.exfiltration.actualTrenchLengthFt}"></div>
-            <div class="field-row"><label>K (cfs/ft&sup2;-ft)</label><input data-ex="hydraulicConductivityK" value="${s.exfiltration.hydraulicConductivityK}"></div>
-            <div class="field-row"><label>Factor of safety</label><input data-ex="factorOfSafety" value="${s.exfiltration.factorOfSafety}"></div>
-            <div class="field-row"><label>%WQ required (0-1)</label><input data-ex="percentWqRequired" value="${s.exfiltration.percentWqRequired}"></div>
-          </div>
-        </div>
+        <div class="field-row"><label>Control elevation (ft)</label><input data-ex="controlElevationFt" value="${s.exfiltration.controlElevationFt}"></div>
+        <div class="field-row"><label>Design water table (ft)</label><input data-ex="designWaterTableFt" value="${s.exfiltration.designWaterTableFt}"></div>
+        <div class="field-row"><label>Trench top elevation (ft)</label><input data-ex="trenchTopElevationFt" value="${s.exfiltration.trenchTopElevationFt}"></div>
+        <div class="field-row"><label>Trench bottom elevation (ft)</label><input data-ex="trenchBottomElevationFt" value="${s.exfiltration.trenchBottomElevationFt}"></div>
+        <div class="field-row"><label>Pipe invert elevation (ft)</label><input data-ex="pipeInvertElevationFt" value="${s.exfiltration.pipeInvertElevationFt}"></div>
+        <div class="field-row"><label>Lowest overflow elevation (ft)</label><input data-ex="lowestOverflowElevationFt" value="${s.exfiltration.lowestOverflowElevationFt}"></div>
+        <div class="field-row"><label>Design water surface (ft)</label><input data-ex="designWaterSurfaceFt" value="${s.exfiltration.designWaterSurfaceFt}"></div>
+        <div class="field-row"><label>Trench width, W (ft)</label><input data-ex="trenchWidthFt" value="${s.exfiltration.trenchWidthFt}"></div>
+        <div class="field-row"><label>Provided trench length (ft)</label><input data-ex="actualTrenchLengthFt" value="${s.exfiltration.actualTrenchLengthFt}"></div>
+        <div class="field-row"><label>K (cfs/ft&sup2;-ft)</label><input data-ex="hydraulicConductivityK" value="${s.exfiltration.hydraulicConductivityK}"></div>
+        <div class="field-row"><label>Factor of safety</label><input data-ex="factorOfSafety" value="${s.exfiltration.factorOfSafety}"></div>
+        <div class="field-row"><label>%WQ required (0-1)</label><input data-ex="percentWqRequired" value="${s.exfiltration.percentWqRequired}"></div>
         <div class="field-row"><label>H2 method</label>
           <select data-ex="h2Method" id="stack-h2method-select">
             <option value="SFWMD_STANDARD" ${s.exfiltration.h2Method==="SFWMD_STANDARD"?"selected":""}>SFWMD Standard</option>
