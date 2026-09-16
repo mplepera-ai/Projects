@@ -127,6 +127,18 @@
 
   .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 40px; }
 
+  .help-layout { display: flex; gap: 28px; align-items: flex-start; }
+  .help-fields { flex: 1 1 60%; min-width: 0; }
+  .help-sidebar {
+    flex: 0 0 300px; background: var(--paper-panel); border: 1px solid var(--line);
+    padding: 16px 18px; font-size: 12.5px; line-height: 1.5; position: sticky; top: 20px;
+  }
+  .help-title { font-weight: 600; margin-bottom: 6px; color: var(--ink); font-size: 13px; }
+  .help-block { margin-bottom: 20px; }
+  .help-block:last-child { margin-bottom: 0; }
+  .h2-method-option { padding: 8px 10px; border-radius: 2px; margin-bottom: 6px; border: 1px solid var(--line); }
+  .h2-method-option.active-method { background: var(--amber-bg); border-color: var(--amber); }
+
   table { border-collapse: collapse; width: 100%; margin-bottom: 10px; background: var(--paper-panel); }
   th, td { border: 1px solid var(--line); padding: 6px 10px; font-size: 13px; text-align: left; }
   th { background: var(--ink); color: #fff; font-weight: 600; font-size: 12px; }
@@ -208,10 +220,10 @@
     <button data-tab="project" class="active"><span class="rail-num">01</span>Project</button>
     <button data-tab="existing"><span class="rail-num">02</span>Existing Conditions</button>
     <button data-tab="proposed"><span class="rail-num">03</span>Proposed Conditions</button>
-    <button data-tab="run"><span class="rail-num">04</span>Run Model</button>
-    <button data-tab="results"><span class="rail-num">05</span>Results</button>
-    <button data-tab="reports"><span class="rail-num">06</span>Reports</button>
-    <button data-tab="storage"><span class="rail-num">07</span>Storage &amp; Water Quality</button>
+    <button data-tab="storage"><span class="rail-num">04</span>Storage &amp; Water Quality</button>
+    <button data-tab="run"><span class="rail-num">05</span>Run Model</button>
+    <button data-tab="results"><span class="rail-num">06</span>Results</button>
+    <button data-tab="reports"><span class="rail-num">07</span>Reports</button>
 
     <div class="rail-file">
       <div class="rail-file-label">Project File</div>
@@ -466,6 +478,12 @@ function renderBasinPanel(key, label) {
 
   renderStructures(key, label);
   renderLinks(key, label);
+}
+
+function highlightActiveH2Method(method) {
+  document.querySelectorAll(".h2-method-option").forEach(el => {
+    el.classList.toggle("active-method", el.dataset.h2Help === method);
+  });
 }
 
 function renderStackForm(key, label) {
@@ -951,6 +969,8 @@ document.querySelectorAll(".rail button[data-tab]").forEach(btn => {
     document.querySelectorAll(".panel").forEach(p=>p.classList.remove("active"));
     btn.classList.add("active");
     document.getElementById("panel-" + btn.dataset.tab).classList.add("active");
+    // Basins can be added/renamed on other tabs -- keep this dropdown current.
+    if (btn.dataset.tab === "storage") populateMergeTargetBasinOptions();
   });
 });
 
@@ -994,7 +1014,20 @@ function renderStoragePanel() {
     <div id="swale-list"></div>
     <div class="toolbar"><button class="btn secondary small" id="add-swale">+ Add Swale</button></div>
 
+    <p class="section-note">Merge the swale storage above into a basin's stage-storage curve on the
+      Existing/Proposed Conditions tabs -- this is what lets the routing model actually see that
+      storage, so it can tell you whether a well is even needed. This edits the selected basin's
+      curve directly; review it on that tab afterward.</p>
+    <div class="field-row"><label>Merge into basin</label>
+      <select id="merge-target-basin"></select>
+    </div>
+    <div class="toolbar">
+      <button class="btn secondary small" id="btn-merge-swale-storage">Merge Swale Storage Into Selected Basin</button>
+    </div>
+    <div id="merge-status"></div>
+
     <h2>Water Quality (Legacy SFWMD Volumetric Method)</h2>
+    <p class="section-note">Required Volume = greater of (1.0 in &times; site area) or (2.5 in &times; impervious fraction &times; site area), minus credits below.</p>
     <div class="field-row"><label>Project area (acres)</label><input data-wq="projectAreaAcres" value="${s.waterQuality.projectAreaAcres}"></div>
     <div class="field-row"><label>Impervious fraction (0-1)</label><input data-wq="imperviousFraction" value="${s.waterQuality.imperviousFraction}"></div>
     <div class="field-row"><label>Dry detention credit (ac-in)</label><input data-wq="dryDetentionCreditAcIn" value="${s.waterQuality.dryDetentionCreditAcIn}"></div>
@@ -1004,47 +1037,70 @@ function renderStoragePanel() {
 
     <h2>Exfiltration Trench</h2>
     <p class="section-note">Automatically uses the conservative (L2) equation when Ds&gt;Du or W&gt;2(Du+Ds), matching Section 22.</p>
-    <p class="section-note"><b>Design Water Table</b> and <b>Design Water Surface</b> are different quantities that can
-      coincidentally share the same number on a given project -- they are not the same field entered twice.
-      <b>Design Water Table</b> is the groundwater elevation, used to split the trench into its saturated (Ds) and
-      unsaturated (Du) portions. <b>Design Water Surface</b> is the water surface elevation at the trench used to
-      compute available head (H2 = Design Water Surface &minus; Design Water Table, under the SFWMD Standard method).</p>
-    <div class="grid-2">
-      <div>
-        <div class="field-row"><label>Control elevation (ft)</label><input data-ex="controlElevationFt" value="${s.exfiltration.controlElevationFt}"></div>
-        <div class="field-row"><label>Design water table (ft)</label><input data-ex="designWaterTableFt" value="${s.exfiltration.designWaterTableFt}"></div>
-        <div class="field-row"><label>Trench top elevation (ft)</label><input data-ex="trenchTopElevationFt" value="${s.exfiltration.trenchTopElevationFt}"></div>
-        <div class="field-row"><label>Trench bottom elevation (ft)</label><input data-ex="trenchBottomElevationFt" value="${s.exfiltration.trenchBottomElevationFt}"></div>
-        <div class="field-row"><label>Pipe invert elevation (ft)</label><input data-ex="pipeInvertElevationFt" value="${s.exfiltration.pipeInvertElevationFt}"></div>
-        <div class="field-row"><label>Lowest overflow elevation (ft)</label><input data-ex="lowestOverflowElevationFt" value="${s.exfiltration.lowestOverflowElevationFt}"></div>
+    <div class="help-layout">
+      <div class="help-fields">
+        <div class="grid-2">
+          <div>
+            <div class="field-row"><label>Control elevation (ft)</label><input data-ex="controlElevationFt" value="${s.exfiltration.controlElevationFt}"></div>
+            <div class="field-row"><label>Design water table (ft)</label><input data-ex="designWaterTableFt" value="${s.exfiltration.designWaterTableFt}"></div>
+            <div class="field-row"><label>Trench top elevation (ft)</label><input data-ex="trenchTopElevationFt" value="${s.exfiltration.trenchTopElevationFt}"></div>
+            <div class="field-row"><label>Trench bottom elevation (ft)</label><input data-ex="trenchBottomElevationFt" value="${s.exfiltration.trenchBottomElevationFt}"></div>
+            <div class="field-row"><label>Pipe invert elevation (ft)</label><input data-ex="pipeInvertElevationFt" value="${s.exfiltration.pipeInvertElevationFt}"></div>
+            <div class="field-row"><label>Lowest overflow elevation (ft)</label><input data-ex="lowestOverflowElevationFt" value="${s.exfiltration.lowestOverflowElevationFt}"></div>
+          </div>
+          <div>
+            <div class="field-row"><label>Design water surface (ft)</label><input data-ex="designWaterSurfaceFt" value="${s.exfiltration.designWaterSurfaceFt}"></div>
+            <div class="field-row"><label>Trench width, W (ft)</label><input data-ex="trenchWidthFt" value="${s.exfiltration.trenchWidthFt}"></div>
+            <div class="field-row"><label>Provided trench length (ft)</label><input data-ex="actualTrenchLengthFt" value="${s.exfiltration.actualTrenchLengthFt}"></div>
+            <div class="field-row"><label>K (cfs/ft&sup2;-ft)</label><input data-ex="hydraulicConductivityK" value="${s.exfiltration.hydraulicConductivityK}"></div>
+            <div class="field-row"><label>Factor of safety</label><input data-ex="factorOfSafety" value="${s.exfiltration.factorOfSafety}"></div>
+            <div class="field-row"><label>%WQ required (0-1)</label><input data-ex="percentWqRequired" value="${s.exfiltration.percentWqRequired}"></div>
+          </div>
+        </div>
+        <div class="field-row"><label>H2 method</label>
+          <select data-ex="h2Method" id="stack-h2method-select">
+            <option value="SFWMD_STANDARD" ${s.exfiltration.h2Method==="SFWMD_STANDARD"?"selected":""}>SFWMD Standard</option>
+            <option value="BROWARD_POSITIVE_DISCHARGE" ${s.exfiltration.h2Method==="BROWARD_POSITIVE_DISCHARGE"?"selected":""}>Broward Positive-Discharge</option>
+            <option value="USER_DEFINED" ${s.exfiltration.h2Method==="USER_DEFINED"?"selected":""}>User-Defined</option>
+          </select>
+        </div>
+        <div class="field-row" id="row-userh2" style="${s.exfiltration.h2Method==="USER_DEFINED"?"":"display:none;"}">
+          <label>User-defined H2 (ft)</label><input data-ex="userDefinedH2Ft" value="${s.exfiltration.userDefinedH2Ft}">
+        </div>
+        <div class="field-row"><label>Effective head, Heff (ft)</label>
+          <input data-ex="effectiveHeadFt" placeholder="blank = same as H2" value="${s.exfiltration.effectiveHeadFt}">
+        </div>
+        <div class="field-row"><label>Required volume basis</label>
+          <select data-ex="requiredVolumeBasis">
+            <option value="runoffVolume" ${s.exfiltration.requiredVolumeBasis==="runoffVolume"?"selected":""}>Proposed runoff volume (minus swale credit)</option>
+            <option value="waterQuality" ${s.exfiltration.requiredVolumeBasis==="waterQuality"?"selected":""}>Water quality required volume (minus swale credit)</option>
+          </select>
+        </div>
       </div>
-      <div>
-        <div class="field-row"><label>Design water surface (ft)</label><input data-ex="designWaterSurfaceFt" value="${s.exfiltration.designWaterSurfaceFt}"></div>
-        <div class="field-row"><label>Trench width, W (ft)</label><input data-ex="trenchWidthFt" value="${s.exfiltration.trenchWidthFt}"></div>
-        <div class="field-row"><label>Provided trench length (ft)</label><input data-ex="actualTrenchLengthFt" value="${s.exfiltration.actualTrenchLengthFt}"></div>
-        <div class="field-row"><label>K (cfs/ft&sup2;-ft)</label><input data-ex="hydraulicConductivityK" value="${s.exfiltration.hydraulicConductivityK}"></div>
-        <div class="field-row"><label>Factor of safety</label><input data-ex="factorOfSafety" value="${s.exfiltration.factorOfSafety}"></div>
-        <div class="field-row"><label>%WQ required (0-1)</label><input data-ex="percentWqRequired" value="${s.exfiltration.percentWqRequired}"></div>
+
+      <div class="help-sidebar">
+        <div class="help-block">
+          <div class="help-title">Design Water Table vs. Design Water Surface</div>
+          <p style="margin:0 0 8px 0;"><b>Design Water Table</b> &mdash; the groundwater elevation. Splits the
+            trench into its saturated (Ds) and unsaturated (Du) portions.</p>
+          <p style="margin:0;"><b>Design Water Surface</b> &mdash; the water surface elevation at the trench
+            during the design storm. Combined with Design Water Table to compute available head, H2.
+            These are two different physical quantities -- they can coincidentally share a value on a
+            given project, but are never the same input entered twice.</p>
+        </div>
+        <div class="help-block">
+          <div class="help-title">H2 Methods (current selection highlighted)</div>
+          <div class="h2-method-option" data-h2-help="SFWMD_STANDARD">
+            <b>SFWMD Standard</b><br>H2 = Design Water Surface &minus; Design Water Table
+          </div>
+          <div class="h2-method-option" data-h2-help="BROWARD_POSITIVE_DISCHARGE">
+            <b>Broward Positive-Discharge</b><br>H2 = min(Design Water Surface, Lowest Overflow Elevation) &minus; Design Water Table
+          </div>
+          <div class="h2-method-option" data-h2-help="USER_DEFINED">
+            <b>User-Defined</b><br>H2 = value entered directly above
+          </div>
+        </div>
       </div>
-    </div>
-    <div class="field-row"><label>H2 method</label>
-      <select data-ex="h2Method" id="stack-h2method-select">
-        <option value="SFWMD_STANDARD" ${s.exfiltration.h2Method==="SFWMD_STANDARD"?"selected":""}>SFWMD Standard</option>
-        <option value="BROWARD_POSITIVE_DISCHARGE" ${s.exfiltration.h2Method==="BROWARD_POSITIVE_DISCHARGE"?"selected":""}>Broward Positive-Discharge</option>
-        <option value="USER_DEFINED" ${s.exfiltration.h2Method==="USER_DEFINED"?"selected":""}>User-Defined</option>
-      </select>
-    </div>
-    <div class="field-row" id="row-userh2" style="${s.exfiltration.h2Method==="USER_DEFINED"?"":"display:none;"}">
-      <label>User-defined H2 (ft)</label><input data-ex="userDefinedH2Ft" value="${s.exfiltration.userDefinedH2Ft}">
-    </div>
-    <div class="field-row"><label>Effective head, Heff (ft)</label>
-      <input data-ex="effectiveHeadFt" placeholder="blank = same as H2" value="${s.exfiltration.effectiveHeadFt}">
-    </div>
-    <div class="field-row"><label>Required volume basis</label>
-      <select data-ex="requiredVolumeBasis">
-        <option value="runoffVolume" ${s.exfiltration.requiredVolumeBasis==="runoffVolume"?"selected":""}>Proposed runoff volume (minus swale credit)</option>
-        <option value="waterQuality" ${s.exfiltration.requiredVolumeBasis==="waterQuality"?"selected":""}>Water quality required volume (minus swale credit)</option>
-      </select>
     </div>
 
     <div class="toolbar">
@@ -1064,8 +1120,10 @@ function renderStoragePanel() {
     s.exfiltration[f] = (f === "h2Method" || f === "requiredVolumeBasis") ? i.value : parseFloat(i.value);
     if (f === "h2Method") {
       document.getElementById("row-userh2").style.display = i.value === "USER_DEFINED" ? "" : "none";
+      highlightActiveH2Method(i.value);
     }
   }));
+  highlightActiveH2Method(s.exfiltration.h2Method);
 
   document.getElementById("add-swale").addEventListener("click", () => {
     s.swales.push({ name: "New Swale", method: "trapezoidal_area", bottomElevationFt: "", topElevationFt: "",
@@ -1077,7 +1135,54 @@ function renderStoragePanel() {
   document.getElementById("btn-download-calc-pdf").addEventListener("click", downloadCalcPdf);
   document.getElementById("btn-download-excel").addEventListener("click", downloadExcelWorkbook);
 
+  populateMergeTargetBasinOptions();
+  document.getElementById("btn-merge-swale-storage").addEventListener("click", mergeSwaleStorageIntoBasin);
+
   renderSwaleList();
+}
+
+function populateMergeTargetBasinOptions() {
+  const sel = document.getElementById("merge-target-basin");
+  const options = [];
+  for (const condKey of ["existing", "proposed"]) {
+    const cond = state.basins[condKey];
+    for (const [bid, basin] of Object.entries(cond.basins)) {
+      options.push({ value: `${condKey}:${bid}`, label: `${condKey === "existing" ? "Existing" : "Proposed"}: ${basin.name || bid}` });
+    }
+  }
+  sel.innerHTML = options.map(o => `<option value="${o.value}">${o.label}</option>`).join("");
+}
+
+async function mergeSwaleStorageIntoBasin() {
+  const statusEl = document.getElementById("merge-status");
+  const sel = document.getElementById("merge-target-basin").value;
+  const [condKey, basinId] = sel.split(":");
+  const basin = state.basins[condKey].basins[basinId];
+
+  if (!state.storageWQ.swales.length) {
+    statusEl.innerHTML = `<div class="callout warning"><span class="badge review">NOTHING TO MERGE</span> Add at least one swale first.</div>`;
+    return;
+  }
+
+  statusEl.innerHTML = `<p class="muted">Merging on the engine server&hellip;</p>`;
+  try {
+    const resp = await fetch("/api/calc/merge-basin-storage", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ basinStagePoints: basin.stagePoints, swales: state.storageWQ.swales }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || "Unknown server error");
+    basin.stagePoints = data.stagePoints;
+    statusEl.innerHTML = `<div class="callout"><span class="badge pass">MERGED</span> Swale storage merged into
+      "${basin.name || basinId}" (${condKey}). Review the updated Stage-Storage Curve on that basin's tab --
+      it now has ${data.stagePoints.length} points spanning the full range.</div>`;
+    // If that basin's panel is currently rendered, refresh it so the curve is visible immediately.
+    if (condKey === "existing" || condKey === "proposed") {
+      renderBasinPanel(condKey, condKey === "existing" ? "Existing Conditions" : "Proposed Conditions");
+    }
+  } catch (err) {
+    statusEl.innerHTML = `<div class="callout critical"><span class="badge critical">ERROR</span> ${err.message}</div>`;
+  }
 }
 
 function renderSwaleList() {

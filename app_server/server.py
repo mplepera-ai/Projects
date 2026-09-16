@@ -33,7 +33,7 @@ from flask import Flask, request, jsonify, send_file, Response
 
 from api.adapter import (
     run_project, build_project_from_app_json, build_report_options, AdapterError,
-    run_storage_calcs, build_storage_objects,
+    run_storage_calcs, build_storage_objects, merge_swale_storage_into_basin,
 )
 from reports.pdf_export import export_permit_report_pdf
 from reports.generator import permit_summary_markdown
@@ -128,6 +128,19 @@ def api_calc_storage():
         return jsonify({"error": f"Server error: {e}"}), 500
 
 
+@app.route("/api/calc/merge-basin-storage", methods=["POST"])
+def api_merge_basin_storage():
+    try:
+        data = request.get_json(force=True)
+        merged_points = merge_swale_storage_into_basin(data["basinStagePoints"], data["swales"])
+        return jsonify({"stagePoints": merged_points})
+    except (AdapterError, KeyError) as e:
+        return jsonify({"error": f"Missing or invalid input: {e}"}), 400
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"Server error: {e}"}), 500
+
+
 @app.route("/api/report/calc-pdf", methods=["POST"])
 def api_report_calc_pdf():
     try:
@@ -147,6 +160,8 @@ def api_report_calc_pdf():
                 existing_runoff=objs["existing_runoff"], proposed_runoff=objs["proposed_runoff"],
                 swales=objs["swales"], exfiltration_trench=objs["trench"],
                 required_wq_volume_cuft=objs["required_for_trench_cuft"],
+                required_volume_basis_label=objs["required_volume_basis_label"],
+                required_volume_before_swale_credit_cuft=objs["required_volume_before_swale_credit_cuft"],
             )
             tmp_path = tmp.name
 
