@@ -55,6 +55,8 @@ def export_swale_exfiltration_calc_pdf(
     swales: List[Swale],
     exfiltration_trench: Optional[ExfiltrationTrench],
     required_wq_volume_cuft: float,
+    required_volume_basis_label: str = "Proposed Runoff Volume",
+    required_volume_before_swale_credit_cuft: Optional[float] = None,
 ) -> str:
     styles = _styles()
     doc = SimpleDocTemplate(output_path, pagesize=letter,
@@ -129,10 +131,18 @@ def export_swale_exfiltration_calc_pdf(
         story.append(Paragraph(f"<b>Total dry-retention swale storage = {total_swale_cf:,.0f} CF</b>", styles["CalcBody"]))
 
         if exfiltration_trench is not None:
-            vwq_exf_cf = max(proposed_runoff.runoff_volume_cuft - total_swale_cf, 0.0)
+            # This must display the SAME value actually used in the trench
+            # calculation below -- never a value recomputed independently
+            # here, which is exactly how the display and the math drifted
+            # apart in an earlier version of this report.
+            basis_volume = (
+                required_volume_before_swale_credit_cuft
+                if required_volume_before_swale_credit_cuft is not None
+                else required_wq_volume_cuft + total_swale_cf
+            )
             story.append(Paragraph(
-                f"Vwq (exfiltration trench) = Proposed Runoff Volume - Swale Storage "
-                f"= {proposed_runoff.runoff_volume_cuft:,.0f} - {total_swale_cf:,.0f} = {vwq_exf_cf:,.0f} CF",
+                f"Vwq (exfiltration trench) = {required_volume_basis_label} - Swale Storage "
+                f"= {basis_volume:,.0f} - {total_swale_cf:,.0f} = {required_wq_volume_cuft:,.0f} CF",
                 styles["CalcBody"],
             ))
 
