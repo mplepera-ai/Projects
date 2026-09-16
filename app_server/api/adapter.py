@@ -257,7 +257,7 @@ def build_report_options(opts: Dict[str, Any]) -> ReportOptions:
 # ---------------------------------------------------------------------------
 
 from storage.runoff_volume import compute_runoff_volume
-from storage.swale import Swale, make_area_based_swale
+from storage.swale import Swale, make_area_based_swale, merge_swales_into_basin_curve
 from storage.exfiltration import ExfiltrationTrench, H2Method
 from storage.water_quality import LegacyVolumetricInputs, calculate_legacy_volumetric, calculate_custom
 
@@ -386,16 +386,34 @@ def build_storage_objects(data: Dict[str, Any]):
 
     trench = None
     required_for_trench_cuft = 0.0
+    basis_label = "Proposed Runoff Volume"
+    basis_volume_before_credit = 0.0
     exf_data = data.get("exfiltration")
     if exf_data and not _blank(exf_data.get("controlElevationFt")):
         trench = _exfiltration_from_dict(exf_data)
         basis = exf_data.get("requiredVolumeBasis", "waterQuality")
-        if basis == "runoffVolume" and proposed_runoff is not None:
+        if basis == "runoffVolume":
+            if proposed_runoff is None:
+                raise AdapterError(
+                    "Exfiltration trench's Required Volume Basis is set to 'Proposed runoff volume', "
+                    "but the Site Areas / Soil Storage section is empty -- there's no runoff volume to "
+                    "use. Fill in Site Areas and Soil Storage, or change Required Volume Basis to "
+                    "'Water quality required volume'."
+                )
+            basis_label = "Proposed Runoff Volume"
             base_cuft = proposed_runoff.runoff_volume_cuft
-        elif wq_required_cuft is not None:
-            base_cuft = wq_required_cuft
         else:
-            base_cuft = float(exf_data.get("requiredVolumeCuftOverride", 0.0))
+            if wq_required_cuft is None:
+                raise AdapterError(
+                    "Exfiltration trench's Required Volume Basis is set to 'Water quality required "
+                    "volume', but the Water Quality section is empty -- there's no required volume to "
+                    "use (this previously silently defaulted to 0, producing a false PASS -- now it "
+                    "stops and tells you instead). Fill in Water Quality, or change Required Volume "
+                    "Basis to 'Proposed runoff volume'."
+                )
+            basis_label = "Water Quality Required Volume"
+            base_cuft = wq_required_cuft
+        basis_volume_before_credit = base_cuft
         required_for_trench_cuft = max(base_cuft - total_swale_cuft, 0.0)
 
     return {
@@ -403,6 +421,8 @@ def build_storage_objects(data: Dict[str, Any]):
         "swales": swales, "total_swale_cuft": total_swale_cuft,
         "wq_result": wq_result, "trench": trench,
         "required_for_trench_cuft": required_for_trench_cuft,
+        "required_volume_basis_label": basis_label,
+        "required_volume_before_swale_credit_cuft": basis_volume_before_credit,
     }
 
 
@@ -431,6 +451,34 @@ def run_storage_calcs(data: Dict[str, Any]) -> Dict[str, Any]:
     if objs["trench"] is not None:
         report = objs["trench"].report(objs["required_for_trench_cuft"])
         report["requiredVolumeAfterSwaleCreditCuft"] = objs["required_for_trench_cuft"]
+        report["requiredVolumeBasisLabel"] = objs["required_volume_basis_label"]
+        report["requiredVolumeBeforeSwaleCreditCuft"] = objs["required_volume_before_swale_credit_cuft"]
         out["exfiltration"] = report
 
     return out
+
+
+def merge_swale_storage_into_basin(basin_stage_points: list, swales_data: list) -> list:
+    """
+    Merges the currently-defined swales' storage into an existing
+    basin's stage-storage curve (Section 17's "TOTAL STORAGE" concept:
+    every contributing component reflected without duplication).
+
+    This directly answers "does this site even need a well" -- a basin
+    curve that already accounts for its swale storage may turn out to
+    have enough capacity on its own, which was invisible before this
+    existed since swale/exfiltration storage never touched the routing
+    model's basin curve.
+
+    Returns the merged [[stage, storage], ...] points, ready to
+    replace the basin's stagePoints in the app -- this function does
+    not mutate anything itself, so the caller decides whether/how to
+    apply it (kept explicit rather than automatic, per the "never hide
+    a calculation" principle already used for H2).
+    """
+    base_curve = StageStorageCurve(points=[(float(p[0]), float(p[1])) for p in basin_stage_points])
+    swales = [_swale_from_dict(s) for s in swales_data]
+    if not swales:
+        raise AdapterError("No swales are defined to merge -- add at least one swale first.")
+    merged = merge_swales_into_basin_curve(base_curve, swales)
+    return [[round(s, 4), round(v, 6)] for s, v in merged.points]
