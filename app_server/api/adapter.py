@@ -1,0 +1,436 @@
+"""
+api/adapter.py
+
+Translates between the browser app's JSON project shape (metadata,
+storms, basins-with-plain-dict-structures) and the real engine objects
+(Project, BasinNetwork, Basin, DrainageWell/Orifice/RectangularWeir).
+
+This is the ONLY place that shape-shifting happens. Nothing here
+computes anything -- it builds engine objects and hands off to
+project.model / qa.validation / reports.*, exactly like the CLI demos
+do. That's deliberate: the server must not become a second place that
+reimplements calculation logic, or we're right back to the two-engines
+problem this whole rebuild was meant to avoid.
+
+Current scope: each condition is a full BasinNetwork -- one or more
+basins plus interbasin links (Orifice/Weir connecting two basins),
+matching hydraulics/network.py. This is the multi-basin support that
+was previously missing from the app (single "SITE" basin only);
+Excel/PDF exports that inherently assume one basin (the calc-sheet
+style reports) still use the FIRST basin per condition -- see the
+docstring on those export functions in server.py for that narrower
+limitation.
+"""
+
+from __future__ import annotations
+from typing import Any, Dict
+
+from core.interpolation import StageStorageCurve
+from hydraulics.structures import DrainageWell, Pump, Orifice, RectangularWeir, DestinationClassification
+from hydraulics.basin import Basin
+from hydraulics.network import BasinNetwork, InterbasinLink
+from regulatory.profiles import RegulatoryProfile, RequiredEvent
+from project.model import (
+    Project, ProjectMetadata, Condition, Scenario,
+    run_all_scenarios, compare_existing_vs_proposed,
+)
+from qa.validation import run_qa, Finding
+from reports.generator import ReportOptions
+
+
+class AdapterError(Exception):
+    pass
+
+
+def _req_float(d: Dict[str, Any], key: str, label: str) -> float:
+    """Reads a required numeric field with a clear error message instead
+    of a raw Python exception when it's missing or blank -- the app's
+    Storage & Water Quality inputs default to blank, so this is the
+    normal way a user will first hit a validation error, not an edge
+    case."""
+    val = d.get(key, "")
+    if val in (None, ""):
+        raise AdapterError(f"Please enter a value for '{label}'.")
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        raise AdapterError(f"'{label}' must be a number (got '{val}').")
+
+
+_EVENT_DEFS = [
+    # (code, label, purpose, return_period_years, app_storm_key)
+    ("5Y-1D", "5-Year / 24-Hour", "Parking lot protection", 5, "y5"),
+    ("25Y-3D", "25-Year / 72-Hour", "Attenuation / pre-vs-post", 25, "y25"),
+    ("100Y-3D", "100-Year / 72-Hour", "Flood protection, zero off-site discharge", 100, "y100"),
+]
+
+
+def _structure_from_dict(d: Dict[str, Any]):
+    kind = d.get("kind")
+    name = d.get("name", "Unnamed")
+    destination = DestinationClassification(d.get("destination", "OFFSITE_DISCHARGE"))
+    enabled = bool(d.get("enabled", True))
+
+    if kind == "well":
+        return DrainageWell(
+            name=name, capacity_gpm=float(d["capacityGpm"]),
+            turn_on_stage=float(d["turnOnStage"]), turn_off_stage=float(d["turnOffStage"]),
+            destination=destination, enabled=enabled,
+        )
+    if kind == "pump":
+        return Pump(
+            name=name, capacity_cfs=float(d["capacityCfs"]),
+            turn_on_stage=float(d["turnOnStage"]), turn_off_stage=float(d["turnOffStage"]),
+            destination=destination, enabled=enabled,
+        )
+    if kind == "orifice":
+        return Orifice(
+            name=name, invert_elevation_ft=float(d["invertElevationFt"]),
+            area_sqft=float(d["areaSqft"]), discharge_coefficient=float(d.get("cd", 0.6)),
+            destination=destination, enabled=enabled,
+        )
+    if kind == "weir":
+        return RectangularWeir(
+            name=name, crest_elevation_ft=float(d["crestElevationFt"]),
+            length_ft=float(d["lengthFt"]), discharge_coefficient=float(d.get("c", 3.1)),
+            destination=destination, enabled=enabled,
+        )
+    raise AdapterError(f"Unknown structure kind '{kind}' for structure '{name}'.")
+
+
+def _basin_from_dict(d: Dict[str, Any], basin_id: str) -> Basin:
+    points = [(float(p[0]), float(p[1])) for p in d["stagePoints"]]
+    structures = [_structure_from_dict(s) for s in d.get("structures", [])]
+    return Basin(
+        basin_id=basin_id, name=d.get("name", basin_id),
+        area_acres=float(d["areaAcres"]), ground_storage_inches=float(d["groundStorageIn"]),
+        time_of_concentration_hours=float(d["tcHours"]), initial_stage_ft=float(d["initialStageFt"]),
+        stage_storage=StageStorageCurve(points=points), structures=structures,
+    )
+
+
+def _network_from_dict(d: Dict[str, Any]) -> BasinNetwork:
+    """d has shape: {"basins": {basinId: basinDict, ...}, "links": [linkDict, ...]}
+    (or, for backward compatibility with older single-basin project files,
+    the old flat basin-fields shape, in which case it's treated as one
+    basin named "SITE" with no links)."""
+    if "basins" in d:
+        basins = {bid: _basin_from_dict(bd, bid) for bid, bd in d["basins"].items()}
+        if not basins:
+            raise AdapterError("A condition must have at least one basin.")
+        links = []
+        for ld in d.get("links", []):
+            structure = _structure_from_dict(ld["structure"])
+            links.append(InterbasinLink(
+                link_id=ld.get("id", f"{ld['fromBasinId']}->{ld['toBasinId']}"),
+                from_basin_id=ld["fromBasinId"], to_basin_id=ld["toBasinId"], structure=structure,
+            ))
+        return BasinNetwork(basins=basins, links=links)
+    # legacy single-basin shape
+    return BasinNetwork(basins={"SITE": _basin_from_dict(d, "SITE")})
+
+
+def build_project_from_app_json(data: Dict[str, Any]) -> Project:
+    m = data.get("metadata", {})
+    metadata = ProjectMetadata(
+        project_name=m.get("name", "Untitled Project"),
+        project_address=m.get("address", ""),
+        project_number=m.get("number", ""),
+        client=m.get("client", ""),
+        engineer_name=m.get("engineer", ""),
+        pe_license_number=m.get("pe", ""),
+        engineering_firm=m.get("firm", ""),
+        regulatory_agency=m.get("agency", ""),
+        report_date=m.get("date", ""),
+    )
+
+    storms = data.get("storms", {})
+    required_events = []
+    depth_overrides = {}
+    for code, label, purpose, return_period, app_key in _EVENT_DEFS:
+        app_storm = storms.get(app_key, {})
+        duration = float(app_storm.get("dur", 24 if code == "5Y-1D" else 72))
+        depth = float(app_storm.get("depth", 0.0))
+        required_events.append(RequiredEvent(
+            code=code, label=label, purpose=purpose, return_period_years=return_period,
+            duration_hours=duration, default_selected=True,
+            zero_offsite_discharge=(code == "100Y-3D"),
+        ))
+        depth_overrides[code] = depth
+
+    profile = RegulatoryProfile(name="Broward County SWM (project-specific)", version="app", required_events=required_events)
+
+    project = Project(metadata=metadata, regulatory_profile=profile)
+
+    basins = data.get("basins", {})
+    if "existing" not in basins or "proposed" not in basins:
+        raise AdapterError("Project JSON must include both 'existing' and 'proposed' basins.")
+
+    project.add_condition(Condition(name="existing", network=_network_from_dict(basins["existing"])))
+    project.add_condition(Condition(name="proposed", network=_network_from_dict(basins["proposed"])))
+
+    scenarios = []
+    for event in required_events:
+        for cond_name in ("existing", "proposed"):
+            sid = f"{'EX' if cond_name == 'existing' else 'PR'}-{event.code}"
+            zod = event.zero_offsite_discharge if cond_name == "proposed" else False
+            scenarios.append(Scenario(
+                scenario_id=sid, condition_name=cond_name, event_code=event.code,
+                time_step_hours=0.2, zero_offsite_discharge=zod,
+                rainfall_depth_override_inches=depth_overrides[event.code],
+            ))
+    project.scenarios = scenarios
+
+    return project
+
+
+def run_project(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Builds the project, runs every scenario, runs QA, and returns a
+    plain-JSON-serializable results payload for the frontend. Each
+    scenario now reports ALL basins in its network (multi-basin
+    support), not a single hardcoded basin id."""
+    project = build_project_from_app_json(data)
+    results = run_all_scenarios(project)
+
+    scenario_payload = []
+    for sid, r in sorted(results.items()):
+        basin_ids = list(r.network_result.peak_stage_ft.keys())
+        basins_out = []
+        for bid in basin_ids:
+            mb = r.network_result.mass_balance[bid]
+            basins_out.append({
+                "basinId": bid,
+                "peakStageFt": r.network_result.peak_stage_ft[bid],
+                "peakStageTimeHours": r.network_result.peak_stage_time_hours[bid],
+                "massBalance": {
+                    "externalInflowAF": mb.external_inflow_acre_ft,
+                    "interbasinInflowAF": mb.interbasin_inflow_acre_ft,
+                    "interbasinOutflowAF": mb.interbasin_outflow_acre_ft,
+                    "onsiteAF": mb.onsite_disposal_acre_ft,
+                    "offsiteAF": mb.offsite_discharge_acre_ft,
+                    "finalStorage": mb.final_storage_acre_ft,
+                    "residualAF": mb.residual_acre_ft,
+                    "residualPct": mb.residual_pct_of_inflow,
+                },
+            })
+        scenario_payload.append({
+            "scenarioId": sid,
+            "condition": r.scenario.condition_name,
+            "event": r.scenario.event_code,
+            "eventLabel": r.storm.name,
+            "zod": r.scenario.zero_offsite_discharge,
+            "networkTotalOffsiteAF": r.network_result.network_total_offsite_discharge_acre_ft,
+            "basins": basins_out,
+        })
+
+    comparison_payload = [
+        {
+            "event": row.event_code, "basin": row.basin_id,
+            "existingFt": row.existing_peak_stage_ft, "proposedFt": row.proposed_peak_stage_ft,
+            "diffFt": row.difference_ft, "result": row.result,
+        }
+        for row in compare_existing_vs_proposed(results)
+    ]
+
+    findings = run_qa(project, results)
+    findings_payload = [{"level": f.level.value, "message": f.message, "objectId": f.object_id} for f in findings]
+
+    return {"scenarios": scenario_payload, "comparison": comparison_payload, "findings": findings_payload}
+
+
+def build_report_options(opts: Dict[str, Any]) -> ReportOptions:
+    return ReportOptions(
+        include_cover=bool(opts.get("cover", True)),
+        include_permit_criteria=bool(opts.get("criteria", True)),
+        include_final_summary_table=bool(opts.get("summary", True)),
+        include_comparison_table=bool(opts.get("comparison", True)),
+        include_qa_summary=bool(opts.get("qa", True)),
+        cascade_detail_scenario_ids=set() if not opts.get("detail", False) else None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Storage & Water Quality calculators (swale, exfiltration, SCS runoff
+# volume, legacy volumetric water quality) -- self-contained calculators
+# that don't need a full Project/scenario run, so they get their own
+# lightweight adapter functions rather than routing through Project.
+# ---------------------------------------------------------------------------
+
+from storage.runoff_volume import compute_runoff_volume
+from storage.swale import Swale, make_area_based_swale
+from storage.exfiltration import ExfiltrationTrench, H2Method
+from storage.water_quality import LegacyVolumetricInputs, calculate_legacy_volumetric, calculate_custom
+
+
+def _swale_from_dict(d: Dict[str, Any]) -> Swale:
+    method = d.get("method", "cross_section")
+
+    if method == "trapezoidal_area":
+        return make_area_based_swale(
+            name=d.get("name", "Swale"),
+            bottom_elevation_ft=_req_float(d, "bottomElevationFt", "Swale Bottom Elevation (ft)"),
+            top_elevation_ft=_req_float(d, "topElevationFt", "Swale Top Elevation (ft)"),
+            top_area_sqft=_req_float(d, "topAreaSqft", "Swale Top Area (SF)"),
+            bottom_area_sqft=_req_float(d, "bottomAreaSqft", "Swale Bottom Area (SF)"),
+            include_in_basin_storage=bool(d.get("includeInBasinStorage", True)),
+        )
+    if method == "triangular_area":
+        return make_area_based_swale(
+            name=d.get("name", "Swale"),
+            bottom_elevation_ft=_req_float(d, "bottomElevationFt", "Swale Bottom Elevation (ft)"),
+            top_elevation_ft=_req_float(d, "topElevationFt", "Swale Top Elevation (ft)"),
+            top_area_sqft=_req_float(d, "topAreaSqft", "Swale Top Area (SF)"),
+            bottom_area_sqft=0.0,
+            include_in_basin_storage=bool(d.get("includeInBasinStorage", True)),
+        )
+
+    # default: cross-section (bottom width + side slopes) method
+    kwargs = dict(
+        name=d.get("name", "Swale"),
+        bottom_elevation_ft=_req_float(d, "bottomElevationFt", "Swale Bottom Elevation (ft)"),
+        top_elevation_ft=_req_float(d, "topElevationFt", "Swale Top Elevation (ft)"),
+        length_ft=_req_float(d, "lengthFt", "Swale Length (ft)"),
+        include_in_basin_storage=bool(d.get("includeInBasinStorage", True)),
+    )
+    if d.get("irregular"):
+        kwargs["irregular_depth_area"] = [(float(p[0]), float(p[1])) for p in d["irregular"]]
+    else:
+        kwargs["bottom_width_ft"] = float(d.get("bottomWidthFt", 0.0))
+        kwargs["left_side_slope_h_per_v"] = float(d.get("leftSlope", 3.0))
+        kwargs["right_side_slope_h_per_v"] = float(d.get("rightSlope", 3.0))
+    return Swale(**kwargs)
+
+
+def _exfiltration_from_dict(d: Dict[str, Any]) -> ExfiltrationTrench:
+    method = H2Method(d.get("h2Method", "SFWMD_STANDARD"))
+    return ExfiltrationTrench(
+        name=d.get("name", "Exfiltration Trench"),
+        control_elevation_ft=_req_float(d, "controlElevationFt", "Control Elevation (ft)"),
+        design_water_table_ft=_req_float(d, "designWaterTableFt", "Design Water Table (ft)"),
+        trench_top_elevation_ft=_req_float(d, "trenchTopElevationFt", "Trench Top Elevation (ft)"),
+        trench_bottom_elevation_ft=_req_float(d, "trenchBottomElevationFt", "Trench Bottom Elevation (ft)"),
+        pipe_invert_elevation_ft=_req_float(d, "pipeInvertElevationFt", "Pipe Invert Elevation (ft)"),
+        lowest_overflow_elevation_ft=_req_float(d, "lowestOverflowElevationFt", "Lowest Overflow Elevation (ft)"),
+        design_water_surface_ft=_req_float(d, "designWaterSurfaceFt", "Design Water Surface (ft)"),
+        trench_width_ft=_req_float(d, "trenchWidthFt", "Trench Width, W (ft)"),
+        actual_trench_length_ft=_req_float(d, "actualTrenchLengthFt", "Provided Trench Length (ft)"),
+        hydraulic_conductivity_k=_req_float(d, "hydraulicConductivityK", "K (cfs/ft²-ft)"),
+        factor_of_safety=float(d.get("factorOfSafety", 2.0)),
+        h2_method=method,
+        user_defined_h2_ft=float(d["userDefinedH2Ft"]) if d.get("userDefinedH2Ft") not in (None, "") else None,
+        effective_head_ft=float(d["effectiveHeadFt"]) if d.get("effectiveHeadFt") not in (None, "") else None,
+        percent_wq_required=float(d.get("percentWqRequired", 1.0)),
+    )
+
+
+def _blank(v) -> bool:
+    return v is None or v == ""
+
+
+def build_storage_objects(data: Dict[str, Any]):
+    """Builds the real engine objects (not JSON) from the same
+    storageWQ payload shape -- shared by the JSON calculator endpoint
+    and the Excel/PDF export endpoints so there's exactly one place
+    that interprets this payload.
+
+    Each section (site areas/soil storage, swales, water quality,
+    exfiltration) is independent: if a section's key fields are left
+    blank, it's skipped entirely rather than failing the whole
+    calculation. Only a PARTIALLY filled-in section (some fields
+    entered, others left blank) raises a clear error -- that's the
+    difference between "I haven't gotten to this section yet" and
+    "I'm missing something in the section I'm working on."."""
+    sa = data.get("siteAreas", {})
+    ss = data.get("soilStorage", {})
+    existing_runoff = proposed_runoff = None
+    if not _blank(ss.get("rainfallIn")):
+        existing_runoff = compute_runoff_volume(
+            _req_float(sa, "existingSiteSqft", "Existing Site Area (SF)"),
+            _req_float(sa, "existingPerviousSqft", "Existing Pervious Area (SF)"),
+            _req_float(ss, "rainfallIn", "Rainfall, P (in)"),
+            _req_float(ss, "existingCompactedIn", "Existing Compacted Soil Storage (in)"),
+        )
+        proposed_runoff = compute_runoff_volume(
+            _req_float(sa, "proposedSiteSqft", "Proposed Site Area (SF)"),
+            _req_float(sa, "proposedPerviousSqft", "Proposed Pervious Area (SF)"),
+            _req_float(ss, "rainfallIn", "Rainfall, P (in)"),
+            _req_float(ss, "proposedCompactedIn", "Proposed Compacted Soil Storage (in)"),
+        )
+
+    swales = [_swale_from_dict(s) for s in data.get("swales", [])]
+    total_swale_cuft = sum(sw.summary()["max_storage_cuft"] for sw in swales if sw.include_in_basin_storage)
+
+    wq_result = None
+    wq_required_cuft = None
+    wq_data = data.get("waterQuality")
+    wq_active = wq_data and (
+        (wq_data.get("method") == "custom" and not _blank(wq_data.get("customRequiredVolumeAcIn")))
+        or (wq_data.get("method") != "custom" and not _blank(wq_data.get("projectAreaAcres")))
+    )
+    if wq_active:
+        if wq_data.get("method") == "custom":
+            wq_result = calculate_custom(
+                _req_float(wq_data, "customRequiredVolumeAcIn", "Custom Required Volume (ac-in)"),
+                float(wq_data.get("providedVolumeAcIn", 0.0) or 0.0),
+            )
+        else:
+            inputs = LegacyVolumetricInputs(
+                project_area_acres=_req_float(wq_data, "projectAreaAcres", "Project Area (acres)"),
+                impervious_fraction=_req_float(wq_data, "imperviousFraction", "Impervious Fraction"),
+                dry_detention_credit_ac_in=float(wq_data.get("dryDetentionCreditAcIn", 0.0) or 0.0),
+                retention_credit_ac_in=float(wq_data.get("retentionCreditAcIn", 0.0) or 0.0),
+                pretreatment_volume_ac_in=float(wq_data.get("pretreatmentVolumeAcIn", 0.0) or 0.0),
+            )
+            wq_result = calculate_legacy_volumetric(inputs, float(wq_data.get("providedVolumeAcIn", 0.0) or 0.0))
+        wq_required_cuft = wq_result.net_required_volume_ac_in * 3630.0
+
+    trench = None
+    required_for_trench_cuft = 0.0
+    exf_data = data.get("exfiltration")
+    if exf_data and not _blank(exf_data.get("controlElevationFt")):
+        trench = _exfiltration_from_dict(exf_data)
+        basis = exf_data.get("requiredVolumeBasis", "waterQuality")
+        if basis == "runoffVolume" and proposed_runoff is not None:
+            base_cuft = proposed_runoff.runoff_volume_cuft
+        elif wq_required_cuft is not None:
+            base_cuft = wq_required_cuft
+        else:
+            base_cuft = float(exf_data.get("requiredVolumeCuftOverride", 0.0))
+        required_for_trench_cuft = max(base_cuft - total_swale_cuft, 0.0)
+
+    return {
+        "existing_runoff": existing_runoff, "proposed_runoff": proposed_runoff,
+        "swales": swales, "total_swale_cuft": total_swale_cuft,
+        "wq_result": wq_result, "trench": trench,
+        "required_for_trench_cuft": required_for_trench_cuft,
+    }
+
+
+def run_storage_calcs(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Runs the SCS runoff-volume, swale, water-quality, and exfiltration
+    calculators together, matching the flow a real drainage calc sheet
+    follows: runoff volume -> credited swale storage -> remaining
+    volume routed to the exfiltration trench. Returns JSON-safe output."""
+    objs = build_storage_objects(data)
+    out: Dict[str, Any] = {}
+
+    if objs["existing_runoff"] is not None:
+        out["runoffVolume"] = {
+            "existing": vars(objs["existing_runoff"]), "proposed": vars(objs["proposed_runoff"]),
+            "netIncreaseCuft": objs["proposed_runoff"].runoff_volume_cuft - objs["existing_runoff"].runoff_volume_cuft,
+        }
+
+    if objs["swales"]:
+        out["swales"] = [sw.summary() for sw in objs["swales"]]
+        out["totalSwaleStorageCuft"] = objs["total_swale_cuft"]
+
+    if objs["wq_result"] is not None:
+        r = objs["wq_result"]
+        out["waterQuality"] = {k: (v.value if hasattr(v, "value") else v) for k, v in vars(r).items()}
+
+    if objs["trench"] is not None:
+        report = objs["trench"].report(objs["required_for_trench_cuft"])
+        report["requiredVolumeAfterSwaleCreditCuft"] = objs["required_for_trench_cuft"]
+        out["exfiltration"] = report
+
+    return out

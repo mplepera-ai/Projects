@@ -1,0 +1,1257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Drainage Calculations -- Stormwater Routing</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+  :root {
+    --ink: #14213D;
+    --ink-light: #2A3B5C;
+    --paper: #EEF0EC;
+    --paper-panel: #FFFFFF;
+    --line: #C7CCC4;
+    --amber: #B7791F;
+    --amber-bg: #FBF0DA;
+    --red: #A6392A;
+    --red-bg: #F7E4E0;
+    --green: #2F6B4F;
+    --green-bg: #E4F0E9;
+    --mono: 'IBM Plex Mono', monospace;
+    --sans: 'IBM Plex Sans', sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: var(--sans);
+    background: var(--paper);
+    color: var(--ink);
+    background-image:
+      linear-gradient(var(--line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size: 28px 28px;
+    background-attachment: fixed;
+    background-color: var(--paper);
+  }
+  body::before {
+    content: "";
+    position: fixed; inset: 0;
+    background: var(--paper);
+    opacity: 0.55;
+    z-index: -1;
+  }
+
+  .app {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    min-height: 100vh;
+  }
+
+  .rail {
+    background: var(--ink);
+    color: #E8E9E4;
+    padding: 28px 0;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+  }
+  .rail-brand {
+    font-family: var(--mono);
+    font-size: 13px;
+    letter-spacing: 0.04em;
+    color: #9DB4D8;
+    padding: 0 24px 20px 24px;
+    border-bottom: 1px solid rgba(255,255,255,0.12);
+    margin-bottom: 8px;
+  }
+  .rail-brand strong { display: block; color: #fff; font-size: 16px; font-weight: 600; margin-bottom: 3px; }
+
+  .rail button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    color: #C7CFDE;
+    font-family: var(--sans);
+    font-size: 14px;
+    font-weight: 500;
+    padding: 12px 24px;
+    cursor: pointer;
+    border-left: 3px solid transparent;
+  }
+  .rail button:hover { background: rgba(255,255,255,0.05); color: #fff; }
+  .rail button.active {
+    background: rgba(255,255,255,0.08);
+    color: #fff;
+    border-left: 3px solid #9DB4D8;
+  }
+  .rail-num { font-family: var(--mono); color: #6E82A8; margin-right: 10px; font-size: 12px; }
+
+  .rail-file {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    padding: 16px 24px 20px 24px;
+    border-top: 1px solid rgba(255,255,255,0.12);
+  }
+  .rail-file-label { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.06em; color: #6E82A8; margin-bottom: 8px; }
+  .rail-file-btn {
+    display: block; width: 100%; text-align: left; margin-bottom: 6px;
+    background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15);
+    color: #E8E9E4; font-family: var(--sans); font-size: 13px; font-weight: 500;
+    padding: 7px 10px; border-radius: 2px; cursor: pointer;
+  }
+  .rail-file-btn:hover { background: rgba(255,255,255,0.14); }
+  .rail-file-status { font-family: var(--mono); font-size: 11px; color: #7A8BAE; margin-top: 8px; }
+
+  .main { padding: 40px 48px; max-width: 980px; }
+
+  h1 { font-size: 26px; font-weight: 600; margin: 0 0 4px 0; }
+  h2 { font-size: 15px; font-weight: 600; text-transform: none; letter-spacing: 0; margin: 32px 0 14px 0; color: var(--ink); border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+  .subtitle { color: #5B6472; font-size: 14px; margin-bottom: 28px; }
+
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  .field-row { display: grid; grid-template-columns: 220px 1fr; gap: 14px; align-items: center; margin-bottom: 12px; }
+  .field-row label { font-size: 13px; color: #444; }
+  .field-row input, .field-row select {
+    font-family: var(--mono); font-size: 13px; padding: 7px 9px;
+    border: 1px solid var(--line); border-radius: 2px; background: var(--paper-panel);
+    width: 100%;
+  }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 40px; }
+
+  table { border-collapse: collapse; width: 100%; margin-bottom: 10px; background: var(--paper-panel); }
+  th, td { border: 1px solid var(--line); padding: 6px 10px; font-size: 13px; text-align: left; }
+  th { background: var(--ink); color: #fff; font-weight: 600; font-size: 12px; }
+  td input, td select { font-family: var(--mono); font-size: 12.5px; padding: 4px 6px; border: 1px solid var(--line); width: 100%; }
+  td.num, th.num { text-align: right; font-family: var(--mono); }
+
+  .btn {
+    font-family: var(--sans); font-size: 13px; font-weight: 600;
+    padding: 8px 16px; border-radius: 2px; border: 1px solid var(--ink);
+    background: var(--ink); color: #fff; cursor: pointer;
+  }
+  .btn:hover { background: var(--ink-light); }
+  .btn.secondary { background: transparent; color: var(--ink); }
+  .btn.secondary:hover { background: rgba(20,33,61,0.06); }
+  .btn.small { padding: 4px 10px; font-size: 12px; }
+  .btn.danger { border-color: var(--red); color: var(--red); background: transparent; }
+  .btn.danger:hover { background: var(--red-bg); }
+
+  .toolbar { display: flex; gap: 10px; margin-bottom: 14px; }
+
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 2px; font-family: var(--mono); font-size: 11.5px; font-weight: 600; }
+  .badge.pass { background: var(--green-bg); color: var(--green); }
+  .badge.review { background: var(--amber-bg); color: var(--amber); }
+  .badge.critical { background: var(--red-bg); color: var(--red); }
+
+  .callout { border-left: 3px solid var(--ink); background: var(--paper-panel); padding: 12px 16px; font-size: 13px; margin-bottom: 16px; }
+  .callout.warning { border-left-color: var(--amber); }
+  .callout.critical { border-left-color: var(--red); }
+
+  .checkbox-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13.5px; }
+  .checkbox-row input { width: 16px; height: 16px; }
+
+  .report-preview {
+    background: var(--paper-panel); border: 1px solid var(--line); padding: 32px;
+    font-family: var(--mono); font-size: 12px; line-height: 1.6; white-space: pre-wrap;
+    max-height: 600px; overflow-y: auto;
+  }
+
+  .muted { color: #7A8290; font-size: 12.5px; }
+  .section-note { font-size: 12.5px; color: #5B6472; margin-bottom: 14px; }
+
+  @media print {
+    .rail, .no-print { display: none !important; }
+    .main { max-width: none; padding: 0; }
+    body { background: #fff; background-image: none; }
+    .app { display: block; }
+  }
+</style>
+</head>
+<body>
+<script>
+  if (window.location.protocol === "file:") {
+    document.write(`
+      <div style="position:fixed; inset:0; z-index:9999; background:#14213D; color:#fff;
+                   font-family:sans-serif; display:flex; align-items:center; justify-content:center; padding:40px;">
+        <div style="max-width:640px; background:#fff; color:#14213D; padding:32px 40px; border-radius:4px; border-top:6px solid #A6392A;">
+          <h1 style="margin-top:0; font-size:22px;">This page needs to be opened through the server, not double-clicked</h1>
+          <p>You're viewing this file directly (<code>file://...</code>), so there's no server for it to
+             talk to -- every "Failed to fetch" error comes from this. Every calculation and report in
+             this app runs on the local Python server, not in the browser itself.</p>
+          <p><b>To fix it:</b></p>
+          <ol style="line-height:1.7;">
+            <li>Open a terminal / command prompt</li>
+            <li><code>cd</code> into the <code>app_server</code> folder</li>
+            <li>Run: <code>python3 server.py</code></li>
+            <li>Leave that window open, then go to
+                <a href="http://127.0.0.1:5000">http://127.0.0.1:5000</a> in your browser</li>
+          </ol>
+          <p style="margin-bottom:0; font-size:13px; color:#5B6472;">Bookmark that address instead of this file -- the server serves this same page, correctly connected.</p>
+        </div>
+      </div>
+    `);
+  }
+</script>
+
+<div class="app">
+  <nav class="rail">
+    <div class="rail-brand"><strong>Cascade Rebuilt</strong>Stormwater routing &amp; permitting</div>
+    <button data-tab="project" class="active"><span class="rail-num">01</span>Project</button>
+    <button data-tab="existing"><span class="rail-num">02</span>Existing Conditions</button>
+    <button data-tab="proposed"><span class="rail-num">03</span>Proposed Conditions</button>
+    <button data-tab="run"><span class="rail-num">04</span>Run Model</button>
+    <button data-tab="results"><span class="rail-num">05</span>Results</button>
+    <button data-tab="reports"><span class="rail-num">06</span>Reports</button>
+    <button data-tab="storage"><span class="rail-num">07</span>Storage &amp; Water Quality</button>
+
+    <div class="rail-file">
+      <div class="rail-file-label">Project File</div>
+      <button class="rail-file-btn" id="btn-save-project">Save Project</button>
+      <button class="rail-file-btn" id="btn-load-project">Open Project&hellip;</button>
+      <input type="file" id="file-load-project" accept="application/json,.json" style="display:none">
+      <div class="rail-file-status" id="file-status">Unsaved project</div>
+    </div>
+  </nav>
+
+  <main class="main">
+
+    <!-- ===================== PROJECT ===================== -->
+    <section class="panel active" id="panel-project">
+      <h1>Project Information</h1>
+      <p class="subtitle">Enter this once. Everything downstream -- basins, storms, scenarios, reports -- reads from here.</p>
+
+      <div class="field-row"><label>Project name</label><input id="p-name" value="Example Commercial Site"></div>
+      <div class="field-row"><label>Project address</label><input id="p-address" value=""></div>
+      <div class="field-row"><label>Project number</label><input id="p-number" value=""></div>
+      <div class="field-row"><label>Client</label><input id="p-client" value=""></div>
+      <div class="field-row"><label>Engineer name</label><input id="p-engineer" value=""></div>
+      <div class="field-row"><label>P.E. license no.</label><input id="p-pe" value=""></div>
+      <div class="field-row"><label>Engineering firm</label><input id="p-firm" value=""></div>
+      <div class="field-row"><label>Regulatory agency</label><input id="p-agency" value="Broward County SWM / SFWMD"></div>
+      <div class="field-row"><label>Report date</label><input id="p-date" type="date"></div>
+
+      <h2>Design Storm Events</h2>
+      <p class="section-note">Rainfall depths are engine defaults (placeholder shapes, not verified SFWMD curves) -- edit to match the project's actual isohyetal-map values before relying on results.</p>
+      <table>
+        <tr><th>Event</th><th class="num">Duration (hr)</th><th class="num">Rainfall Depth (in)</th><th>Zero-Offsite-Discharge</th></tr>
+        <tr><td>5-Year / 24-Hour</td><td class="num"><input id="storm-5yr-dur" value="24"></td><td class="num"><input id="storm-5yr-depth" value="7.5"></td><td>No</td></tr>
+        <tr><td>25-Year / 72-Hour</td><td class="num"><input id="storm-25yr-dur" value="72"></td><td class="num"><input id="storm-25yr-depth" value="13.0"></td><td>No</td></tr>
+        <tr><td>100-Year / 72-Hour</td><td class="num"><input id="storm-100yr-dur" value="72"></td><td class="num"><input id="storm-100yr-depth" value="17.0"></td><td>Yes (proposed only)</td></tr>
+      </table>
+    </section>
+
+    <!-- ===================== EXISTING / PROPOSED (shared template) ===================== -->
+    <section class="panel" id="panel-existing"></section>
+    <section class="panel" id="panel-proposed"></section>
+
+    <!-- ===================== RUN ===================== -->
+    <section class="panel" id="panel-run">
+      <h1>Run Model</h1>
+      <p class="subtitle">Runs both conditions against all three design storms in one pass -- the proposed 100-year event automatically runs as zero-offsite-discharge.</p>
+      <div class="toolbar">
+        <button class="btn" id="btn-run-all">Run All Scenarios</button>
+      </div>
+      <div id="run-log" class="muted"></div>
+    </section>
+
+    <!-- ===================== RESULTS ===================== -->
+    <section class="panel" id="panel-results">
+      <h1>Results</h1>
+      <div id="results-content"><p class="muted">Run the model first.</p></div>
+    </section>
+
+    <!-- ===================== REPORTS ===================== -->
+    <section class="panel" id="panel-reports">
+      <h1>Reports</h1>
+      <p class="subtitle">Choose exactly which sections to generate, then print or save as PDF.</p>
+
+      <div class="checkbox-row"><input type="checkbox" id="opt-cover" checked><label for="opt-cover">Cover page</label></div>
+      <div class="checkbox-row"><input type="checkbox" id="opt-criteria" checked><label for="opt-criteria">Permit criteria narrative</label></div>
+      <div class="checkbox-row"><input type="checkbox" id="opt-summary" checked><label for="opt-summary">Final model summary table</label></div>
+      <div class="checkbox-row"><input type="checkbox" id="opt-comparison" checked><label for="opt-comparison">Existing vs. proposed comparison</label></div>
+      <div class="checkbox-row"><input type="checkbox" id="opt-qa" checked><label for="opt-qa">QA/QC summary</label></div>
+      <div class="checkbox-row"><input type="checkbox" id="opt-detail"><label for="opt-detail">Detailed Cascade-style routing output (long)</label></div>
+
+      <div class="toolbar no-print">
+        <button class="btn" id="btn-generate-report">Generate Report</button>
+        <button class="btn secondary" id="btn-print">Download PDF Report</button>
+      </div>
+
+      <div class="report-preview" id="report-preview">Click "Generate Report" once the model has been run.</div>
+    </section>
+
+    <!-- ===================== STORAGE & WATER QUALITY ===================== -->
+    <section class="panel" id="panel-storage"></section>
+
+  </main>
+</div>
+
+<script>
+/* =====================================================================
+   APPLICATION STATE + UI
+   ===================================================================== */
+
+const state = {
+  basins: {
+    existing: {
+      activeBasinId: "SITE",
+      basins: {
+        SITE: { name: "Existing Site", areaAcres: 12.0, groundStorageIn: 3.0, tcHours: 0.30, initialStageFt: 5.0,
+          stagePoints: [[5.00,0.00],[5.40,0.00],[6.00,1.80],[7.00,5.10],[8.00,9.60],[9.00,15.80]],
+          structures: [ {kind:"weir", name:"Existing Outfall", crestElevationFt:6.80, lengthFt:6.0, c:3.1, destination:"OFFSITE_DISCHARGE", enabled:true} ] },
+      },
+      links: [],
+    },
+    proposed: {
+      activeBasinId: "SITE",
+      basins: {
+        SITE: { name: "Proposed Site", areaAcres: 12.0, groundStorageIn: 2.5, tcHours: 0.25, initialStageFt: 5.0,
+          stagePoints: [[5.00,0.00],[5.40,0.00],[6.00,2.40],[7.00,6.30],[8.00,11.20],[9.00,17.90]],
+          structures: [
+            {kind:"well", name:"Proposed Well W-1", capacityGpm:210, turnOnStage:5.5, turnOffStage:5.4, destination:"ONSITE_DISPOSAL", enabled:true},
+            {kind:"weir", name:"Proposed Outfall", crestElevationFt:6.90, lengthFt:6.0, c:3.1, destination:"OFFSITE_DISCHARGE", enabled:true},
+          ] },
+      },
+      links: [],
+    },
+  },
+  results: null, // filled by runAll()
+  comparison: null,
+  findings: null,
+  storageWQ: {
+    siteAreas: { existingSiteSqft: "", existingPerviousSqft: "", proposedSiteSqft: "", proposedPerviousSqft: "" },
+    soilStorage: { existingCompactedIn: "", proposedCompactedIn: "", rainfallIn: "" },
+    swales: [],
+    waterQuality: { method: "legacy_volumetric", projectAreaAcres: "", imperviousFraction: "",
+      dryDetentionCreditAcIn: 0, retentionCreditAcIn: 0, pretreatmentVolumeAcIn: 0, providedVolumeAcIn: 0,
+      customRequiredVolumeAcIn: 0 },
+    exfiltration: { name: "Exfiltration Trench ET-1", controlElevationFt: "", designWaterTableFt: "",
+      trenchTopElevationFt: "", trenchBottomElevationFt: "", pipeInvertElevationFt: "",
+      lowestOverflowElevationFt: "", designWaterSurfaceFt: "", trenchWidthFt: "", actualTrenchLengthFt: "",
+      hydraulicConductivityK: "", factorOfSafety: 2.0, h2Method: "SFWMD_STANDARD", userDefinedH2Ft: "",
+      effectiveHeadFt: "", percentWqRequired: 1.0, requiredVolumeBasis: "waterQuality" },
+  },
+  storageResults: null,
+};
+
+function renderBasinPanel(key, label) {
+  const cond = state.basins[key];
+  const el = document.getElementById("panel-" + key);
+  const basinIds = Object.keys(cond.basins);
+  if (!basinIds.includes(cond.activeBasinId)) cond.activeBasinId = basinIds[0];
+  const activeId = cond.activeBasinId;
+  const b = cond.basins[activeId];
+
+  const basinTabs = basinIds.map(id => `
+    <button class="btn small ${id === activeId ? "" : "secondary"}" data-select-basin="${id}">${cond.basins[id].name || id}</button>
+  `).join(" ");
+
+  el.innerHTML = `
+    <h1>${label}</h1>
+    <p class="subtitle">One or more basins, connected as a network. Each basin has its own geometry, stage-storage curve, and structures.</p>
+
+    <h2>Basins</h2>
+    <div class="toolbar">${basinTabs}
+      <button class="btn secondary small" id="add-basin-${key}">+ Add Basin</button>
+      ${basinIds.length > 1 ? `<button class="btn danger small" id="remove-basin-${key}">Remove "${b.name}"</button>` : ""}
+    </div>
+
+    <div class="field-row"><label>Basin name</label><input data-f="name" value="${b.name || activeId}"></div>
+    <div class="field-row"><label>Area (acres)</label><input data-f="areaAcres" value="${b.areaAcres}"></div>
+    <div class="field-row"><label>Ground storage (in)</label><input data-f="groundStorageIn" value="${b.groundStorageIn}"></div>
+    <div class="field-row"><label>Time of concentration (hr)</label><input data-f="tcHours" value="${b.tcHours}"></div>
+    <div class="field-row"><label>Initial stage (ft NAVD)</label><input data-f="initialStageFt" value="${b.initialStageFt}"></div>
+
+    <h2>Stage-Storage Curve</h2>
+    <table id="stage-table-${key}">
+      <tr><th>Stage (ft NAVD)</th><th>Storage (ac-ft)</th><th></th></tr>
+      ${b.stagePoints.map((p,i)=>`<tr>
+        <td><input data-row="${i}" data-col="0" value="${p[0]}"></td>
+        <td><input data-row="${i}" data-col="1" value="${p[1]}"></td>
+        <td><button class="btn small danger" data-remove-stage="${i}">Remove</button></td>
+      </tr>`).join("")}
+    </table>
+    <div class="toolbar"><button class="btn secondary small" id="add-stage-${key}">+ Add stage point</button></div>
+
+    <h2>Hydraulic Structures (local to "${b.name || activeId}")</h2>
+    <div id="structures-${key}"></div>
+    <div class="toolbar">
+      <button class="btn secondary small" data-add-struct="well">+ Drainage Well</button>
+      <button class="btn secondary small" data-add-struct="orifice">+ Orifice</button>
+      <button class="btn secondary small" data-add-struct="weir">+ Weir</button>
+      <button class="btn secondary small" id="toggle-stack-${key}">+ Generate Well/Pump Stack&hellip;</button>
+    </div>
+    <div id="stack-form-${key}" style="display:none;"></div>
+
+    <h2>Interbasin Links</h2>
+    <p class="section-note">Connects two basins in this condition's network with a structure (orifice or weir). Flow direction is From &rarr; To.</p>
+    <div id="links-${key}"></div>
+    ${basinIds.length > 1
+      ? `<div class="toolbar"><button class="btn secondary small" id="add-link-${key}">+ Add Interbasin Link</button></div>`
+      : `<p class="muted">Add a second basin to create links between them.</p>`}
+  `;
+
+  el.querySelectorAll("input[data-f]").forEach(inp => {
+    inp.addEventListener("change", () => {
+      b[inp.dataset.f] = inp.dataset.f === "name" ? inp.value : parseFloat(inp.value);
+      if (inp.dataset.f === "name") renderBasinPanel(key, label); // refresh tab labels
+    });
+  });
+  el.querySelectorAll("input[data-row]").forEach(inp => {
+    inp.addEventListener("change", () => {
+      b.stagePoints[+inp.dataset.row][+inp.dataset.col] = parseFloat(inp.value);
+    });
+  });
+  el.querySelectorAll("[data-remove-stage]").forEach(btn => {
+    btn.addEventListener("click", () => { b.stagePoints.splice(+btn.dataset.removeStage,1); renderBasinPanel(key,label); });
+  });
+  document.getElementById(`add-stage-${key}`).addEventListener("click", () => {
+    b.stagePoints.push([b.stagePoints[b.stagePoints.length-1][0]+1, b.stagePoints[b.stagePoints.length-1][1]+1]);
+    renderBasinPanel(key,label);
+  });
+  el.querySelectorAll("[data-add-struct]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const kind = btn.dataset.addStruct;
+      const defaults = {
+        well:   {kind:"well", name:"New Well", capacityGpm:210, turnOnStage:b.initialStageFt+0.5, turnOffStage:b.initialStageFt+0.4, destination:"ONSITE_DISPOSAL", enabled:true},
+        orifice:{kind:"orifice", name:"New Orifice", invertElevationFt:b.initialStageFt+1, areaSqft:1.0, cd:0.6, destination:"OFFSITE_DISCHARGE", enabled:true},
+        weir:   {kind:"weir", name:"New Weir", crestElevationFt:b.initialStageFt+1.5, lengthFt:6.0, c:3.1, destination:"OFFSITE_DISCHARGE", enabled:true},
+      };
+      b.structures.push(defaults[kind]);
+      renderStructures(key,label);
+    });
+  });
+  document.getElementById(`toggle-stack-${key}`).addEventListener("click", () => {
+    const formEl = document.getElementById(`stack-form-${key}`);
+    const showing = formEl.style.display !== "none";
+    formEl.style.display = showing ? "none" : "block";
+    if (!showing) renderStackForm(key, label);
+  });
+  el.querySelectorAll("[data-select-basin]").forEach(btn => {
+    btn.addEventListener("click", () => { cond.activeBasinId = btn.dataset.selectBasin; renderBasinPanel(key,label); });
+  });
+  document.getElementById(`add-basin-${key}`).addEventListener("click", () => {
+    let n = 2, newId;
+    do { newId = "B" + n; n++; } while (cond.basins[newId]);
+    cond.basins[newId] = {
+      name: "New Basin", areaAcres: 1.0, groundStorageIn: 2.0, tcHours: 0.2, initialStageFt: b.initialStageFt,
+      stagePoints: [
+        [b.initialStageFt, 0.0], [b.initialStageFt + 1, 0.5], [b.initialStageFt + 2, 2.0],
+        [b.initialStageFt + 4, 6.0], [b.initialStageFt + 6, 12.0], [b.initialStageFt + 10, 25.0],
+      ],
+      structures: [],
+    };
+    cond.activeBasinId = newId;
+    renderBasinPanel(key, label);
+  });
+  const removeBtn = document.getElementById(`remove-basin-${key}`);
+  if (removeBtn) {
+    removeBtn.addEventListener("click", () => {
+      if (!confirm(`Remove basin "${b.name}"? Any links to/from it will also be removed.`)) return;
+      delete cond.basins[activeId];
+      cond.links = cond.links.filter(l => l.fromBasinId !== activeId && l.toBasinId !== activeId);
+      cond.activeBasinId = Object.keys(cond.basins)[0];
+      renderBasinPanel(key, label);
+    });
+  }
+
+  renderStructures(key, label);
+  renderLinks(key, label);
+}
+
+function renderStackForm(key, label) {
+  const cond = state.basins[key];
+  const b = cond.basins[cond.activeBasinId];
+  const el = document.getElementById(`stack-form-${key}`);
+
+  el.innerHTML = `
+    <div class="callout">
+      <p class="section-note" style="margin-top:0;">
+        Models a well/pump rated in <b>gpm per foot of head</b> as a stack of discrete structures at
+        incrementing elevations -- the format regulatory agencies expect (Cascade has no native
+        continuous head-capacity structure). Each stage carries the SAME incremental capacity, so the
+        combined stack approximates a linear discharge-vs-head curve as more stages activate. This
+        automates the exact bookkeeping a 2026 Broward review flagged as a common manual error
+        (accidentally duplicating or omitting an increment across stages).
+      </p>
+      <div class="field-row"><label>Structure type</label>
+        <select id="stack-kind-${key}">
+          <option value="well">Drainage Well</option>
+          <option value="pump">Pump</option>
+        </select>
+      </div>
+      <div class="field-row"><label>Name prefix</label><input id="stack-name-${key}" value="Well Stack"></div>
+      <div class="field-row"><label>Rate per well (gpm per ft of head)</label><input id="stack-rate-${key}" value="210"></div>
+      <div class="field-row"><label>Number of wells (combined at each stage)</label><input id="stack-numwells-${key}" value="2"></div>
+      <div class="field-row"><label>Starting (first) on-elevation (ft)</label><input id="stack-start-${key}" value="${(b.initialStageFt + 1).toFixed(2)}"></div>
+      <div class="field-row"><label>Step height between stages (ft)</label><input id="stack-step-${key}" value="1.0"></div>
+      <div class="field-row"><label>Number of stages</label><input id="stack-stages-${key}" value="5"></div>
+      <div class="field-row"><label>Hysteresis (on minus off, ft)</label><input id="stack-hyst-${key}" value="0.1"></div>
+      <div class="field-row"><label>Destination</label>
+        <select id="stack-dest-${key}">
+          <option value="ONSITE_DISPOSAL">Onsite Disposal</option>
+          <option value="OFFSITE_DISCHARGE">Offsite Discharge</option>
+        </select>
+      </div>
+      <div id="stack-preview-${key}" class="section-note"></div>
+      <div class="toolbar">
+        <button class="btn small" id="stack-generate-${key}">Generate Stack</button>
+        <button class="btn secondary small" id="stack-cancel-${key}">Cancel</button>
+      </div>
+    </div>
+  `;
+
+  const updatePreview = () => {
+    const rate = parseFloat(document.getElementById(`stack-rate-${key}`).value) || 0;
+    const numWells = parseFloat(document.getElementById(`stack-numwells-${key}`).value) || 0;
+    const stages = parseInt(document.getElementById(`stack-stages-${key}`).value) || 0;
+    const combined = rate * numWells;
+    document.getElementById(`stack-preview-${key}`).textContent =
+      `Combined rate: ${combined.toFixed(0)} gpm per ft of head. Will create ${stages} structures, ` +
+      `each carrying ${combined.toFixed(0)} gpm once active -- total capacity above the top stage: ${(combined*stages).toFixed(0)} gpm.`;
+  };
+  ["rate","numwells","stages"].forEach(f => document.getElementById(`stack-${f}-${key}`).addEventListener("input", updatePreview));
+  updatePreview();
+
+  document.getElementById(`stack-cancel-${key}`).addEventListener("click", () => { el.style.display = "none"; });
+
+  document.getElementById(`stack-generate-${key}`).addEventListener("click", () => {
+    const kind = document.getElementById(`stack-kind-${key}`).value;
+    const namePrefix = document.getElementById(`stack-name-${key}`).value || "Well Stack";
+    const rate = parseFloat(document.getElementById(`stack-rate-${key}`).value);
+    const numWells = parseFloat(document.getElementById(`stack-numwells-${key}`).value);
+    const start = parseFloat(document.getElementById(`stack-start-${key}`).value);
+    const step = parseFloat(document.getElementById(`stack-step-${key}`).value);
+    const stages = parseInt(document.getElementById(`stack-stages-${key}`).value);
+    const hyst = parseFloat(document.getElementById(`stack-hyst-${key}`).value);
+    const destination = document.getElementById(`stack-dest-${key}`).value;
+
+    if (!(rate > 0) || !(numWells > 0) || !(stages > 0) || !(step > 0)) {
+      alert("Rate, number of wells, step height, and number of stages must all be positive numbers.");
+      return;
+    }
+    const combinedCapacity = rate * numWells;
+
+    for (let i = 0; i < stages; i++) {
+      const onStage = start + i * step;
+      const struct = {
+        name: `${namePrefix} @ ${onStage.toFixed(2)} ft`,
+        turnOnStage: onStage, turnOffStage: onStage - hyst,
+        destination, enabled: true,
+      };
+      if (kind === "well") { struct.kind = "well"; struct.capacityGpm = combinedCapacity; }
+      else { struct.kind = "pump"; struct.capacityCfs = combinedCapacity / 448.831; }
+      b.structures.push(struct);
+    }
+
+    el.style.display = "none";
+    renderStructures(key, label);
+  });
+}
+
+function renderStructures(key, label) {
+  const cond = state.basins[key];
+  const b = cond.basins[cond.activeBasinId];
+  const el = document.getElementById(`structures-${key}`);
+  if (b.structures.length === 0) { el.innerHTML = `<p class="muted">No structures defined.</p>`; return; }
+  el.innerHTML = b.structures.map((s,i) => {
+    let fields = "";
+    if (s.kind === "well") {
+      fields = `Capacity <input data-sf="capacityGpm" style="width:70px" value="${s.capacityGpm}"> gpm &nbsp;
+                On <input data-sf="turnOnStage" style="width:60px" value="${s.turnOnStage}"> ft &nbsp;
+                Off <input data-sf="turnOffStage" style="width:60px" value="${s.turnOffStage}"> ft`;
+    } else if (s.kind === "pump") {
+      fields = `Capacity <input data-sf="capacityCfs" style="width:70px" value="${s.capacityCfs}"> cfs &nbsp;
+                On <input data-sf="turnOnStage" style="width:60px" value="${s.turnOnStage}"> ft &nbsp;
+                Off <input data-sf="turnOffStage" style="width:60px" value="${s.turnOffStage}"> ft`;
+    } else if (s.kind === "orifice") {
+      fields = `Invert <input data-sf="invertElevationFt" style="width:60px" value="${s.invertElevationFt}"> ft &nbsp;
+                Area <input data-sf="areaSqft" style="width:60px" value="${s.areaSqft}"> sqft &nbsp;
+                Cd <input data-sf="cd" style="width:50px" value="${s.cd}">`;
+    } else {
+      fields = `Crest <input data-sf="crestElevationFt" style="width:60px" value="${s.crestElevationFt}"> ft &nbsp;
+                Length <input data-sf="lengthFt" style="width:60px" value="${s.lengthFt}"> ft &nbsp;
+                C <input data-sf="c" style="width:50px" value="${s.c}">`;
+    }
+    return `<div class="callout" style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+      <div>
+        <input data-sf="name" style="font-weight:600; border:none; background:transparent; width:180px;" value="${s.name}">
+        <span class="muted">(${s.type || s.kind})</span><br>
+        <span style="font-size:12.5px;">${fields}</span>
+      </div>
+      <div style="text-align:right;">
+        <select data-sf="destination" style="font-size:12px; margin-bottom:6px;">
+          <option value="ONSITE_DISPOSAL" ${s.destination==="ONSITE_DISPOSAL"?"selected":""}>Onsite Disposal</option>
+          <option value="OFFSITE_DISCHARGE" ${s.destination==="OFFSITE_DISCHARGE"?"selected":""}>Offsite Discharge</option>
+          <option value="INTERNAL_TRANSFER" ${s.destination==="INTERNAL_TRANSFER"?"selected":""}>Internal Transfer</option>
+        </select><br>
+        <button class="btn small danger" data-remove-struct="${i}">Remove</button>
+      </div>
+    </div>`;
+  }).join("");
+
+  el.querySelectorAll("[data-sf]").forEach(inp => {
+    inp.addEventListener("change", () => {
+      const idx = [...el.children].indexOf(inp.closest(".callout"));
+      const field = inp.dataset.sf;
+      const val = (field==="name"||field==="destination") ? inp.value : parseFloat(inp.value);
+      b.structures[idx][field] = val;
+    });
+  });
+  el.querySelectorAll("[data-remove-struct]").forEach(btn => {
+    btn.addEventListener("click", () => { b.structures.splice(+btn.dataset.removeStruct,1); renderStructures(key,label); });
+  });
+}
+
+function renderLinks(key, label) {
+  const cond = state.basins[key];
+  const basinIds = Object.keys(cond.basins);
+  const el = document.getElementById(`links-${key}`);
+  if (!el) return;
+
+  if (cond.links.length === 0) { el.innerHTML = `<p class="muted">No interbasin links defined.</p>`; }
+  else {
+    el.innerHTML = cond.links.map((l, i) => {
+      const basinOptions = ids => ids.map(id => `<option value="${id}" ${id===l.fromBasinId?"":""}>${cond.basins[id]?.name || id}</option>`).join("");
+      return `<div class="callout" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+        <div style="font-size:12.5px;">
+          From <select data-lf="fromBasinId" data-i="${i}">${basinIds.map(id=>`<option value="${id}" ${id===l.fromBasinId?"selected":""}>${cond.basins[id].name||id}</option>`).join("")}</select>
+          &rarr; To <select data-lf="toBasinId" data-i="${i}">${basinIds.map(id=>`<option value="${id}" ${id===l.toBasinId?"selected":""}>${cond.basins[id].name||id}</option>`).join("")}</select>
+          &nbsp; Type
+          <select data-lf="kind" data-i="${i}">
+            <option value="orifice" ${l.structure.kind==="orifice"?"selected":""}>Orifice</option>
+            <option value="weir" ${l.structure.kind==="weir"?"selected":""}>Weir</option>
+          </select>
+          &nbsp;
+          ${l.structure.kind === "orifice"
+            ? `Invert <input data-lsf="invertElevationFt" data-i="${i}" style="width:55px" value="${l.structure.invertElevationFt}"> ft
+               Area <input data-lsf="areaSqft" data-i="${i}" style="width:55px" value="${l.structure.areaSqft}"> sqft
+               Cd <input data-lsf="cd" data-i="${i}" style="width:45px" value="${l.structure.cd}">`
+            : `Crest <input data-lsf="crestElevationFt" data-i="${i}" style="width:55px" value="${l.structure.crestElevationFt}"> ft
+               Length <input data-lsf="lengthFt" data-i="${i}" style="width:55px" value="${l.structure.lengthFt}"> ft
+               C <input data-lsf="c" data-i="${i}" style="width:45px" value="${l.structure.c}">`}
+        </div>
+        <button class="btn small danger" data-remove-link="${i}">Remove</button>
+      </div>`;
+    }).join("");
+  }
+
+  el.querySelectorAll("[data-lf]").forEach(sel => {
+    sel.addEventListener("change", () => {
+      const i = +sel.dataset.i, f = sel.dataset.lf;
+      if (f === "kind") {
+        cond.links[i].structure = f === "kind" && sel.value === "orifice"
+          ? { kind: "orifice", name: cond.links[i].structure.name || "Link", invertElevationFt: 1.0, areaSqft: 1.0, cd: 0.6, destination: "INTERNAL_TRANSFER", enabled: true }
+          : { kind: "weir", name: cond.links[i].structure.name || "Link", crestElevationFt: 1.0, lengthFt: 4.0, c: 3.1, destination: "INTERNAL_TRANSFER", enabled: true };
+        renderLinks(key, label);
+      } else {
+        cond.links[i][f] = sel.value;
+      }
+    });
+  });
+  el.querySelectorAll("[data-lsf]").forEach(inp => {
+    inp.addEventListener("change", () => {
+      cond.links[+inp.dataset.i].structure[inp.dataset.lsf] = parseFloat(inp.value);
+    });
+  });
+  el.querySelectorAll("[data-remove-link]").forEach(btn => {
+    btn.addEventListener("click", () => { cond.links.splice(+btn.dataset.removeLink, 1); renderLinks(key, label); });
+  });
+
+  const addBtn = document.getElementById(`add-link-${key}`);
+  if (addBtn) {
+    addBtn.addEventListener("click", () => {
+      const ids = Object.keys(cond.basins);
+      cond.links.push({
+        id: `link-${Date.now()}`, fromBasinId: ids[0], toBasinId: ids[1] || ids[0],
+        structure: { kind: "orifice", name: "Culvert", invertElevationFt: 1.0, areaSqft: 1.0, cd: 0.6, destination: "INTERNAL_TRANSFER", enabled: true },
+      });
+      renderLinks(key, label);
+    });
+  }
+}
+
+function collectProjectPayload() {
+  return {
+    metadata: {
+      name: document.getElementById("p-name").value, address: document.getElementById("p-address").value,
+      number: document.getElementById("p-number").value, client: document.getElementById("p-client").value,
+      engineer: document.getElementById("p-engineer").value, pe: document.getElementById("p-pe").value,
+      firm: document.getElementById("p-firm").value, agency: document.getElementById("p-agency").value,
+      date: document.getElementById("p-date").value,
+    },
+    storms: {
+      y5: { dur: document.getElementById("storm-5yr-dur").value, depth: document.getElementById("storm-5yr-depth").value },
+      y25: { dur: document.getElementById("storm-25yr-dur").value, depth: document.getElementById("storm-25yr-depth").value },
+      y100: { dur: document.getElementById("storm-100yr-dur").value, depth: document.getElementById("storm-100yr-depth").value },
+    },
+    basins: state.basins,
+  };
+}
+
+async function runAll() {
+  const runLog = document.getElementById("run-log");
+  runLog.innerHTML = `<div class="callout">Running on the engine server&hellip;</div>`;
+  try {
+    const resp = await fetch("/api/run", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(collectProjectPayload()),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || "Unknown server error");
+    state.results = data.scenarios;
+    state.comparison = data.comparison;
+    state.findings = data.findings;
+    runLog.innerHTML = `<div class="callout">Ran ${data.scenarios.length} scenarios via the engine server. See Results.</div>`;
+    renderResults();
+  } catch (err) {
+    runLog.innerHTML = `<div class="callout critical">
+      <span class="badge critical">ERROR</span> Could not reach the engine server: ${err.message}.
+      Make sure <code>python3 server.py</code> is running.</div>`;
+  }
+}
+
+function renderResults() {
+  const el = document.getElementById("results-content");
+  if (!state.results) { el.innerHTML = `<p class="muted">Run the model first.</p>`; return; }
+
+  const rows = state.results.flatMap(r => r.basins.map(bs => `<tr>
+    <td>${r.scenarioId}</td><td>${r.condition}</td><td>${r.eventLabel}</td><td>${bs.basinId}</td>
+    <td class="num">${bs.peakStageFt.toFixed(3)}</td>
+    <td class="num">${bs.massBalance.offsiteAF.toFixed(4)}</td>
+    <td class="num">${r.networkTotalOffsiteAF.toFixed(4)}</td>
+    <td>${r.zod ? "Yes" : "No"}</td>
+  </tr>`)).join("");
+
+  const compareRows = state.comparison.map(c => {
+    const badge = c.result === "PASS" ? `<span class="badge pass">PASS</span>` :
+      c.result === "N/A" ? `<span class="badge">N/A</span>` : `<span class="badge review">${c.result}</span>`;
+    const ex = c.existingFt != null ? c.existingFt.toFixed(2) : "&mdash;";
+    const diff = c.diffFt != null ? `${c.diffFt>=0?"+":""}${c.diffFt.toFixed(2)}` : "&mdash;";
+    return `<tr><td>${c.event}</td><td>${c.basin}</td><td class="num">${ex}</td><td class="num">${c.proposedFt.toFixed(2)}</td>
+      <td class="num">${diff}</td><td>${badge}</td></tr>`;
+  }).join("");
+
+  const findingsHtml = state.findings.length === 0 ? `<p class="muted">No findings.</p>` :
+    state.findings.map(f => `<div class="callout ${f.level==='CRITICAL'?'critical':'warning'}">
+      <span class="badge ${f.level==='CRITICAL'?'critical':'review'}">${f.level}</span>
+      &nbsp;[${f.objectId}] ${f.message}</div>`).join("");
+
+  el.innerHTML = `
+    <h2>Final Model Summary</h2>
+    <p class="section-note">One row per basin per scenario. "Network Offsite" is the total across all basins in that scenario -- the number the zero-offsite-discharge compliance check actually applies to (Section 37).</p>
+    <table>
+      <tr><th>Scenario</th><th>Condition</th><th>Event</th><th>Basin</th><th class="num">Peak Stage (ft)</th><th class="num">Basin Offsite (ac-ft)</th><th class="num">Network Offsite (ac-ft)</th><th>ZOD</th></tr>
+      ${rows}
+    </table>
+
+    <h2>Existing vs. Proposed Comparison</h2>
+    <table>
+      <tr><th>Event</th><th>Basin</th><th class="num">Existing (ft)</th><th class="num">Proposed (ft)</th><th class="num">Difference (ft)</th><th>Result</th></tr>
+      ${compareRows}
+    </table>
+
+    <h2>QA/QC Findings</h2>
+    ${findingsHtml}
+  `;
+}
+
+function collectReportOptions() {
+  return {
+    cover: document.getElementById("opt-cover").checked,
+    criteria: document.getElementById("opt-criteria").checked,
+    summary: document.getElementById("opt-summary").checked,
+    comparison: document.getElementById("opt-comparison").checked,
+    qa: document.getElementById("opt-qa").checked,
+    detail: document.getElementById("opt-detail").checked,
+  };
+}
+
+async function generateReport() {
+  const preview = document.getElementById("report-preview");
+  preview.textContent = "Generating on the engine server\u2026";
+  try {
+    const resp = await fetch("/api/report/markdown", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: collectProjectPayload(), options: collectReportOptions() }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || "Unknown server error");
+    preview.textContent = data.markdown;
+  } catch (err) {
+    preview.textContent = "Could not reach the engine server: " + err.message + "\nMake sure python3 server.py is running.";
+  }
+}
+
+async function downloadPdfReport() {
+  const btn = document.getElementById("btn-print");
+  const original = btn.textContent;
+  btn.textContent = "Generating PDF\u2026";
+  btn.disabled = true;
+  try {
+    const resp = await fetch("/api/report/pdf", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: collectProjectPayload(), options: collectReportOptions() }),
+    });
+    if (!resp.ok) {
+      const data = await resp.json();
+      throw new Error(data.error || "Unknown server error");
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = (document.getElementById("p-name").value || "drainage-report").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") + ".pdf";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert("Could not generate PDF: " + err.message + "\nMake sure python3 server.py is running.");
+  } finally {
+    btn.textContent = original;
+    btn.disabled = false;
+  }
+}
+
+/* =====================================================================
+   PROJECT FILE -- save the whole project (metadata, storms, both
+   basins) as one portable .json file, and load it back. Deliberately
+   does NOT store computed results (Section 63/64: a stale cached
+   result baked into the file would defeat the point of re-running
+   when inputs change) -- only the inputs needed to reconstruct the
+   project and re-run it.
+   ===================================================================== */
+
+const PROJECT_FILE_SCHEMA_VERSION = "1.0";
+
+function collectProjectData() {
+  return {
+    schema_version: PROJECT_FILE_SCHEMA_VERSION,
+    metadata: {
+      name: document.getElementById("p-name").value,
+      address: document.getElementById("p-address").value,
+      number: document.getElementById("p-number").value,
+      client: document.getElementById("p-client").value,
+      engineer: document.getElementById("p-engineer").value,
+      pe: document.getElementById("p-pe").value,
+      firm: document.getElementById("p-firm").value,
+      agency: document.getElementById("p-agency").value,
+      date: document.getElementById("p-date").value,
+    },
+    storms: {
+      y5: { dur: document.getElementById("storm-5yr-dur").value, depth: document.getElementById("storm-5yr-depth").value },
+      y25: { dur: document.getElementById("storm-25yr-dur").value, depth: document.getElementById("storm-25yr-depth").value },
+      y100: { dur: document.getElementById("storm-100yr-dur").value, depth: document.getElementById("storm-100yr-depth").value },
+    },
+    basins: state.basins,
+    storageWQ: state.storageWQ,
+  };
+}
+
+function slugify(name) {
+  return (name || "project").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "project";
+}
+
+function saveProject() {
+  const data = collectProjectData();
+  const json = JSON.stringify(data, null, 2);
+  const blob = new Blob([json], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const filename = slugify(data.metadata.name) + ".drainage.json";
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  document.getElementById("file-status").textContent = "Saved as " + filename;
+}
+
+function applyProjectData(data) {
+  if (data.schema_version !== PROJECT_FILE_SCHEMA_VERSION) {
+    const proceed = confirm(
+      `This file was saved with schema version "${data.schema_version}", ` +
+      `but this app expects "${PROJECT_FILE_SCHEMA_VERSION}". Some fields may not load correctly. Continue?`
+    );
+    if (!proceed) return false;
+  }
+  const m = data.metadata || {};
+  document.getElementById("p-name").value = m.name || "";
+  document.getElementById("p-address").value = m.address || "";
+  document.getElementById("p-number").value = m.number || "";
+  document.getElementById("p-client").value = m.client || "";
+  document.getElementById("p-engineer").value = m.engineer || "";
+  document.getElementById("p-pe").value = m.pe || "";
+  document.getElementById("p-firm").value = m.firm || "";
+  document.getElementById("p-agency").value = m.agency || "";
+  document.getElementById("p-date").value = m.date || "";
+
+  const st = data.storms || {};
+  if (st.y5) { document.getElementById("storm-5yr-dur").value = st.y5.dur; document.getElementById("storm-5yr-depth").value = st.y5.depth; }
+  if (st.y25) { document.getElementById("storm-25yr-dur").value = st.y25.dur; document.getElementById("storm-25yr-depth").value = st.y25.depth; }
+  if (st.y100) { document.getElementById("storm-100yr-dur").value = st.y100.dur; document.getElementById("storm-100yr-depth").value = st.y100.depth; }
+
+  if (data.basins) {
+    state.basins = data.basins;
+    renderBasinPanel("existing", "Existing Conditions");
+    renderBasinPanel("proposed", "Proposed Conditions");
+  }
+
+  if (data.storageWQ) {
+    state.storageWQ = data.storageWQ;
+    renderStoragePanel();
+  }
+
+  // Loading a different project invalidates any prior run -- Section 63:
+  // changing inputs invalidates prior results, and a freshly loaded file
+  // is effectively "all inputs changed."
+  state.results = null;
+  document.getElementById("run-log").innerHTML = "";
+  document.getElementById("results-content").innerHTML = `<p class="muted">Run the model first.</p>`;
+  document.getElementById("report-preview").textContent = `Click "Generate Report" once the model has been run.`;
+  return true;
+}
+
+function loadProjectFromFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+      const ok = applyProjectData(data);
+      if (ok) document.getElementById("file-status").textContent = "Opened " + file.name;
+    } catch (e) {
+      alert("Could not read this file as a project file: " + e.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+document.getElementById("btn-save-project").addEventListener("click", saveProject);
+document.getElementById("btn-load-project").addEventListener("click", () => document.getElementById("file-load-project").click());
+document.getElementById("file-load-project").addEventListener("change", (e) => {
+  if (e.target.files.length) loadProjectFromFile(e.target.files[0]);
+  e.target.value = ""; // allow re-selecting the same file later
+});
+
+/* ---- tab navigation ---- */
+document.querySelectorAll(".rail button[data-tab]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".rail button[data-tab]").forEach(b=>b.classList.remove("active"));
+    document.querySelectorAll(".panel").forEach(p=>p.classList.remove("active"));
+    btn.classList.add("active");
+    document.getElementById("panel-" + btn.dataset.tab).classList.add("active");
+  });
+});
+
+document.getElementById("btn-run-all").addEventListener("click", runAll);
+document.getElementById("btn-generate-report").addEventListener("click", generateReport);
+document.getElementById("btn-print").addEventListener("click", downloadPdfReport);
+
+/* =====================================================================
+   STORAGE & WATER QUALITY -- swale, exfiltration, water quality, and
+   SCS runoff-volume calculators. Self-contained from the scenario
+   engine above; these feed the Excel workbook and the standalone
+   swale/exfiltration PDF, not the main routing run.
+   ===================================================================== */
+
+function renderStoragePanel() {
+  const s = state.storageWQ;
+  const el = document.getElementById("panel-storage");
+  el.innerHTML = `
+    <h1>Storage &amp; Water Quality</h1>
+    <p class="subtitle">Swale storage, exfiltration trench sizing, and water quality volume -- independent of the flood-routing model above.</p>
+
+    <h2>Site Areas</h2>
+    <table>
+      <tr><th></th><th class="num">Existing</th><th class="num">Proposed</th></tr>
+      <tr><td>Site Area (SF)</td>
+        <td class="num"><input data-sa="existingSiteSqft" value="${s.siteAreas.existingSiteSqft}"></td>
+        <td class="num"><input data-sa="proposedSiteSqft" value="${s.siteAreas.proposedSiteSqft}"></td></tr>
+      <tr><td>Pervious Area (SF)</td>
+        <td class="num"><input data-sa="existingPerviousSqft" value="${s.siteAreas.existingPerviousSqft}"></td>
+        <td class="num"><input data-sa="proposedPerviousSqft" value="${s.siteAreas.proposedPerviousSqft}"></td></tr>
+    </table>
+
+    <h2>Soil Storage (SCS Storage Method)</h2>
+    <p class="section-note">R = (P - 0.2S)&sup2; / (P + 0.8S) &nbsp; V = Area &times; R / 12</p>
+    <div class="field-row"><label>Rainfall, P (in)</label><input data-ss="rainfallIn" value="${s.soilStorage.rainfallIn}"></div>
+    <p class="section-note" style="margin-top:-6px;">Use whatever storm frequency/duration governs your project's required-storage calculation (e.g. 5-yr/1-hr, 10-yr/24-hr) -- this isn't tied to a specific event.</p>
+    <div class="field-row"><label>Existing compacted soil storage (in)</label><input data-ss="existingCompactedIn" value="${s.soilStorage.existingCompactedIn}"></div>
+    <div class="field-row"><label>Proposed compacted soil storage (in)</label><input data-ss="proposedCompactedIn" value="${s.soilStorage.proposedCompactedIn}"></div>
+
+    <h2>Swales</h2>
+    <div id="swale-list"></div>
+    <div class="toolbar"><button class="btn secondary small" id="add-swale">+ Add Swale</button></div>
+
+    <h2>Water Quality (Legacy SFWMD Volumetric Method)</h2>
+    <div class="field-row"><label>Project area (acres)</label><input data-wq="projectAreaAcres" value="${s.waterQuality.projectAreaAcres}"></div>
+    <div class="field-row"><label>Impervious fraction (0-1)</label><input data-wq="imperviousFraction" value="${s.waterQuality.imperviousFraction}"></div>
+    <div class="field-row"><label>Dry detention credit (ac-in)</label><input data-wq="dryDetentionCreditAcIn" value="${s.waterQuality.dryDetentionCreditAcIn}"></div>
+    <div class="field-row"><label>Retention credit (ac-in)</label><input data-wq="retentionCreditAcIn" value="${s.waterQuality.retentionCreditAcIn}"></div>
+    <div class="field-row"><label>Pretreatment volume (ac-in)</label><input data-wq="pretreatmentVolumeAcIn" value="${s.waterQuality.pretreatmentVolumeAcIn}"></div>
+    <div class="field-row"><label>Provided volume (ac-in)</label><input data-wq="providedVolumeAcIn" value="${s.waterQuality.providedVolumeAcIn}"></div>
+
+    <h2>Exfiltration Trench</h2>
+    <p class="section-note">Automatically uses the conservative (L2) equation when Ds&gt;Du or W&gt;2(Du+Ds), matching Section 22.</p>
+    <p class="section-note"><b>Design Water Table</b> and <b>Design Water Surface</b> are different quantities that can
+      coincidentally share the same number on a given project -- they are not the same field entered twice.
+      <b>Design Water Table</b> is the groundwater elevation, used to split the trench into its saturated (Ds) and
+      unsaturated (Du) portions. <b>Design Water Surface</b> is the water surface elevation at the trench used to
+      compute available head (H2 = Design Water Surface &minus; Design Water Table, under the SFWMD Standard method).</p>
+    <div class="grid-2">
+      <div>
+        <div class="field-row"><label>Control elevation (ft)</label><input data-ex="controlElevationFt" value="${s.exfiltration.controlElevationFt}"></div>
+        <div class="field-row"><label>Design water table (ft)</label><input data-ex="designWaterTableFt" value="${s.exfiltration.designWaterTableFt}"></div>
+        <div class="field-row"><label>Trench top elevation (ft)</label><input data-ex="trenchTopElevationFt" value="${s.exfiltration.trenchTopElevationFt}"></div>
+        <div class="field-row"><label>Trench bottom elevation (ft)</label><input data-ex="trenchBottomElevationFt" value="${s.exfiltration.trenchBottomElevationFt}"></div>
+        <div class="field-row"><label>Pipe invert elevation (ft)</label><input data-ex="pipeInvertElevationFt" value="${s.exfiltration.pipeInvertElevationFt}"></div>
+        <div class="field-row"><label>Lowest overflow elevation (ft)</label><input data-ex="lowestOverflowElevationFt" value="${s.exfiltration.lowestOverflowElevationFt}"></div>
+      </div>
+      <div>
+        <div class="field-row"><label>Design water surface (ft)</label><input data-ex="designWaterSurfaceFt" value="${s.exfiltration.designWaterSurfaceFt}"></div>
+        <div class="field-row"><label>Trench width, W (ft)</label><input data-ex="trenchWidthFt" value="${s.exfiltration.trenchWidthFt}"></div>
+        <div class="field-row"><label>Provided trench length (ft)</label><input data-ex="actualTrenchLengthFt" value="${s.exfiltration.actualTrenchLengthFt}"></div>
+        <div class="field-row"><label>K (cfs/ft&sup2;-ft)</label><input data-ex="hydraulicConductivityK" value="${s.exfiltration.hydraulicConductivityK}"></div>
+        <div class="field-row"><label>Factor of safety</label><input data-ex="factorOfSafety" value="${s.exfiltration.factorOfSafety}"></div>
+        <div class="field-row"><label>%WQ required (0-1)</label><input data-ex="percentWqRequired" value="${s.exfiltration.percentWqRequired}"></div>
+      </div>
+    </div>
+    <div class="field-row"><label>H2 method</label>
+      <select data-ex="h2Method" id="stack-h2method-select">
+        <option value="SFWMD_STANDARD" ${s.exfiltration.h2Method==="SFWMD_STANDARD"?"selected":""}>SFWMD Standard</option>
+        <option value="BROWARD_POSITIVE_DISCHARGE" ${s.exfiltration.h2Method==="BROWARD_POSITIVE_DISCHARGE"?"selected":""}>Broward Positive-Discharge</option>
+        <option value="USER_DEFINED" ${s.exfiltration.h2Method==="USER_DEFINED"?"selected":""}>User-Defined</option>
+      </select>
+    </div>
+    <div class="field-row" id="row-userh2" style="${s.exfiltration.h2Method==="USER_DEFINED"?"":"display:none;"}">
+      <label>User-defined H2 (ft)</label><input data-ex="userDefinedH2Ft" value="${s.exfiltration.userDefinedH2Ft}">
+    </div>
+    <div class="field-row"><label>Effective head, Heff (ft)</label>
+      <input data-ex="effectiveHeadFt" placeholder="blank = same as H2" value="${s.exfiltration.effectiveHeadFt}">
+    </div>
+    <div class="field-row"><label>Required volume basis</label>
+      <select data-ex="requiredVolumeBasis">
+        <option value="runoffVolume" ${s.exfiltration.requiredVolumeBasis==="runoffVolume"?"selected":""}>Proposed runoff volume (minus swale credit)</option>
+        <option value="waterQuality" ${s.exfiltration.requiredVolumeBasis==="waterQuality"?"selected":""}>Water quality required volume (minus swale credit)</option>
+      </select>
+    </div>
+
+    <div class="toolbar">
+      <button class="btn" id="btn-calc-storage">Calculate</button>
+      <button class="btn secondary" id="btn-download-calc-pdf">Download Swale/Exfiltration PDF</button>
+      <button class="btn secondary" id="btn-download-excel">Download Excel Workbook</button>
+    </div>
+
+    <div id="storage-results"></div>
+  `;
+
+  el.querySelectorAll("[data-sa]").forEach(i => i.addEventListener("change", () => { s.siteAreas[i.dataset.sa] = parseFloat(i.value); }));
+  el.querySelectorAll("[data-ss]").forEach(i => i.addEventListener("change", () => { s.soilStorage[i.dataset.ss] = parseFloat(i.value); }));
+  el.querySelectorAll("[data-wq]").forEach(i => i.addEventListener("change", () => { s.waterQuality[i.dataset.wq] = parseFloat(i.value); }));
+  el.querySelectorAll("[data-ex]").forEach(i => i.addEventListener("change", () => {
+    const f = i.dataset.ex;
+    s.exfiltration[f] = (f === "h2Method" || f === "requiredVolumeBasis") ? i.value : parseFloat(i.value);
+    if (f === "h2Method") {
+      document.getElementById("row-userh2").style.display = i.value === "USER_DEFINED" ? "" : "none";
+    }
+  }));
+
+  document.getElementById("add-swale").addEventListener("click", () => {
+    s.swales.push({ name: "New Swale", method: "trapezoidal_area", bottomElevationFt: "", topElevationFt: "",
+      topAreaSqft: "", bottomAreaSqft: "", lengthFt: "", bottomWidthFt: "", leftSlope: 4.0, rightSlope: 4.0,
+      includeInBasinStorage: true });
+    renderSwaleList();
+  });
+  document.getElementById("btn-calc-storage").addEventListener("click", calculateStorage);
+  document.getElementById("btn-download-calc-pdf").addEventListener("click", downloadCalcPdf);
+  document.getElementById("btn-download-excel").addEventListener("click", downloadExcelWorkbook);
+
+  renderSwaleList();
+}
+
+function renderSwaleList() {
+  const s = state.storageWQ;
+  const el = document.getElementById("swale-list");
+  el.innerHTML = s.swales.map((sw, i) => {
+    const method = sw.method || "cross_section";
+    let fields;
+    if (method === "trapezoidal_area") {
+      fields = `Top Area <input data-swf="topAreaSqft" data-i="${i}" style="width:70px" value="${sw.topAreaSqft ?? ""}"> SF &nbsp;
+                Bottom Area <input data-swf="bottomAreaSqft" data-i="${i}" style="width:70px" value="${sw.bottomAreaSqft ?? ""}"> SF
+                <span class="muted">&nbsp; V = (Top+Bottom)/2 &times; Depth</span>`;
+    } else if (method === "triangular_area") {
+      fields = `Top Area <input data-swf="topAreaSqft" data-i="${i}" style="width:70px" value="${sw.topAreaSqft ?? ""}"> SF
+                <span class="muted">&nbsp; V = 0.5 &times; Top Area &times; Depth</span>`;
+    } else {
+      fields = `Length <input data-swf="lengthFt" data-i="${i}" style="width:60px" value="${sw.lengthFt ?? ""}"> ft &nbsp;
+                Bottom Width <input data-swf="bottomWidthFt" data-i="${i}" style="width:55px" value="${sw.bottomWidthFt ?? ""}"> ft &nbsp;
+                Side Slopes <input data-swf="leftSlope" data-i="${i}" style="width:45px" value="${sw.leftSlope ?? ""}">:1 /
+                <input data-swf="rightSlope" data-i="${i}" style="width:45px" value="${sw.rightSlope ?? ""}">:1`;
+    }
+    return `
+    <div class="callout" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+      <div>
+        <input data-swf="name" data-i="${i}" style="font-weight:600; border:none; background:transparent; width:160px;" value="${sw.name}">
+        &nbsp;
+        <select data-swf="method" data-i="${i}" style="font-size:12px;">
+          <option value="cross_section" ${method==="cross_section"?"selected":""}>Cross-Section (bottom width + side slopes)</option>
+          <option value="trapezoidal_area" ${method==="trapezoidal_area"?"selected":""}>Trapezoidal Area (top + bottom area)</option>
+          <option value="triangular_area" ${method==="triangular_area"?"selected":""}>Triangular Area (top area only)</option>
+        </select>
+        <br><span style="font-size:12.5px;">
+          Bottom El. <input data-swf="bottomElevationFt" data-i="${i}" style="width:55px" value="${sw.bottomElevationFt ?? ""}"> ft &nbsp;
+          Top El. <input data-swf="topElevationFt" data-i="${i}" style="width:55px" value="${sw.topElevationFt ?? ""}"> ft &nbsp;
+          ${fields}
+        </span>
+      </div>
+      <button class="btn small danger" data-remove-swale="${i}">Remove</button>
+    </div>
+  `;
+  }).join("") || `<p class="muted">No swales defined.</p>`;
+
+  el.querySelectorAll("[data-swf]").forEach(inp => {
+    inp.addEventListener("change", () => {
+      const i = +inp.dataset.i, f = inp.dataset.swf;
+      s.swales[i][f] = (f === "name" || f === "method") ? inp.value : parseFloat(inp.value);
+      if (f === "method") renderSwaleList();
+    });
+  });
+  el.querySelectorAll("[data-remove-swale]").forEach(btn => {
+    btn.addEventListener("click", () => { s.swales.splice(+btn.dataset.removeSwale, 1); renderSwaleList(); });
+  });
+}
+
+function collectStorageWQPayload() {
+  return {
+    projectName: document.getElementById("p-name").value,
+    projectAddress: document.getElementById("p-address").value,
+    siteAreas: state.storageWQ.siteAreas,
+    soilStorage: state.storageWQ.soilStorage,
+    swales: state.storageWQ.swales,
+    waterQuality: state.storageWQ.waterQuality,
+    exfiltration: state.storageWQ.exfiltration,
+  };
+}
+
+async function calculateStorage() {
+  const el = document.getElementById("storage-results");
+  el.innerHTML = `<p class="muted">Calculating on the engine server&hellip;</p>`;
+  try {
+    const resp = await fetch("/api/calc/storage", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(collectStorageWQPayload()),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || "Unknown server error");
+    state.storageResults = data;
+    renderStorageResults(data);
+  } catch (err) {
+    el.innerHTML = `<div class="callout critical"><span class="badge critical">ERROR</span> ${err.message}</div>`;
+  }
+}
+
+function renderStorageResults(data) {
+  const el = document.getElementById("storage-results");
+  let html = "";
+
+  if (data.runoffVolume) {
+    const rv = data.runoffVolume;
+    html += `<h2>Runoff Volume</h2><table>
+      <tr><th></th><th class="num">Existing</th><th class="num">Proposed</th></tr>
+      <tr><td>Effective Storage, S (in)</td><td class="num">${rv.existing.effective_storage_inches.toFixed(2)}</td><td class="num">${rv.proposed.effective_storage_inches.toFixed(2)}</td></tr>
+      <tr><td>Runoff, R (in)</td><td class="num">${rv.existing.runoff_inches.toFixed(2)}</td><td class="num">${rv.proposed.runoff_inches.toFixed(2)}</td></tr>
+      <tr><td>Runoff Volume (CF)</td><td class="num">${rv.existing.runoff_volume_cuft.toFixed(0)}</td><td class="num">${rv.proposed.runoff_volume_cuft.toFixed(0)}</td></tr>
+    </table><p class="section-note">Net increase (Proposed - Existing): <b>${rv.netIncreaseCuft.toFixed(0)} CF</b></p>`;
+  }
+
+  if (data.swales) {
+    html += `<h2>Swale Storage</h2><table>
+      <tr><th>Swale</th><th class="num">Max Depth (ft)</th><th class="num">Length (ft)</th><th class="num">Max Storage (CF)</th></tr>
+      ${data.swales.map(sw => `<tr><td>${sw.name}</td><td class="num">${sw.max_depth_ft.toFixed(2)}</td><td class="num">${sw.length_ft.toFixed(0)}</td><td class="num">${sw.max_storage_cuft.toFixed(0)}</td></tr>`).join("")}
+    </table><p class="section-note">Total credited swale storage: <b>${data.totalSwaleStorageCuft.toFixed(0)} CF</b></p>`;
+  }
+
+  if (data.waterQuality) {
+    const wq = data.waterQuality;
+    const badge = wq.status === "PASS" ? `<span class="badge pass">PASS</span>` : `<span class="badge review">${wq.status}</span>`;
+    html += `<h2>Water Quality</h2><table>
+      <tr><td>Governing Gross Required Volume</td><td class="num">${wq.governing_gross_required_volume_ac_in.toFixed(3)} ac-in</td></tr>
+      <tr><td>Net Required Volume (after credits)</td><td class="num">${wq.net_required_volume_ac_in.toFixed(3)} ac-in</td></tr>
+      <tr><td>Provided Volume</td><td class="num">${wq.provided_volume_ac_in.toFixed(3)} ac-in</td></tr>
+      <tr><td>Status</td><td>${badge}</td></tr>
+    </table>`;
+  }
+
+  if (data.exfiltration) {
+    const ex = data.exfiltration;
+    const badge = ex.status === "PASS" ? `<span class="badge pass">PASS</span>` : `<span class="badge critical">${ex.status}</span>`;
+    html += `<h2>Exfiltration Trench</h2><table>
+      <tr><td>H2 / Heff (ft)</td><td class="num">${ex.H2_ft.toFixed(2)} / ${ex.Heff_ft.toFixed(2)}</td></tr>
+      <tr><td>Du / Ds (ft)</td><td class="num">${ex.Du_ft.toFixed(2)} / ${ex.Ds_ft.toFixed(2)}</td></tr>
+      <tr><td>Equation Used</td><td>${ex.equation_used}</td></tr>
+      <tr><td>Required Volume (after swale credit)</td><td class="num">${ex.requiredVolumeAfterSwaleCreditCuft.toFixed(0)} CF</td></tr>
+      <tr><td>Required Length</td><td class="num">${ex.required_length_ft.toFixed(1)} LF</td></tr>
+      <tr><td>Provided Length</td><td class="num">${ex.provided_length_ft.toFixed(1)} LF</td></tr>
+      <tr><td>Status</td><td>${badge}</td></tr>
+    </table>`;
+    if (ex.warnings && ex.warnings.length) {
+      html += ex.warnings.map(w => `<div class="callout warning"><span class="badge review">WARNING</span> ${w}</div>`).join("");
+    }
+  }
+
+  el.innerHTML = html || `<p class="muted">Nothing to show.</p>`;
+}
+
+async function downloadCalcPdf() {
+  try {
+    const resp = await fetch("/api/report/calc-pdf", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(collectStorageWQPayload()),
+    });
+    if (!resp.ok) { const d = await resp.json(); throw new Error(d.error || "Unknown server error"); }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "swale-exfiltration-calculations.pdf";
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert("Could not generate PDF: " + err.message);
+  }
+}
+
+async function downloadExcelWorkbook() {
+  try {
+    const resp = await fetch("/api/report/excel", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ project: collectProjectPayload(), storageWQ: collectStorageWQPayload() }),
+    });
+    if (!resp.ok) { const d = await resp.json(); throw new Error(d.error || "Unknown server error"); }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = (document.getElementById("p-name").value || "drainage-calcs").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") + ".xlsx";
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert("Could not generate Excel workbook: " + err.message);
+  }
+}
+
+renderBasinPanel("existing", "Existing Conditions");
+renderBasinPanel("proposed", "Proposed Conditions");
+renderStoragePanel();
+</script>
+</body>
+</html>
