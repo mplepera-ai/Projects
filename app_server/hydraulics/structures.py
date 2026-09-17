@@ -78,20 +78,39 @@ class DrainageWell(Structure):
         return pts[-1][1]
 
     def discharge(self, headwater_stage_ft: float, tailwater_stage_ft: float = 0.0) -> float:
-        if not self.enabled:
+        """Pure read of the CURRENT on/off memory -- must NOT mutate state.
+        The routing solver calls this many times per time step while
+        searching for the converged stage (bisection trial evaluations),
+        so toggling hysteresis here would make the residual function
+        depend on call order instead of on stage alone, and break the
+        solver's bracketing assumption. On/off transitions are decided
+        exclusively by update_hysteresis(), once per accepted time step."""
+        if not self.enabled or not self._is_on:
             return 0.0
+        from core.units import gpm_to_cfs
+        return gpm_to_cfs(self._rated_gpm(headwater_stage_ft))
 
-        # Hysteresis: once on, stays on until stage drops to turn_off_stage.
+    def update_hysteresis(self, headwater_stage_ft: float) -> None:
+        """Commit an on/off transition using an ACCEPTED stage (the
+        converged result of a time step, or the initial stage). Call this
+        once per time step from the routing loop -- never from inside a
+        trial/residual evaluation."""
         if not self._is_on and headwater_stage_ft >= self.turn_on_stage:
             self._is_on = True
         elif self._is_on and headwater_stage_ft <= self.turn_off_stage:
             self._is_on = False
 
-        if not self._is_on:
-            return 0.0
-
-        from core.units import gpm_to_cfs
-        return gpm_to_cfs(self._rated_gpm(headwater_stage_ft))
+    def would_transition(self, headwater_stage_ft: float) -> bool:
+        """True if calling update_hysteresis(headwater_stage_ft) right now
+        would actually flip on/off memory. Read-only -- does not mutate
+        state. Lets a routing loop detect "this step's solved stage implies
+        a transition happened somewhere inside it" so it can re-solve that
+        step at finer resolution instead of crediting/withholding this
+        well's whole-step discharge based on a transition that (per the
+        physics) only really happened partway through."""
+        return (not self._is_on and headwater_stage_ft >= self.turn_on_stage) or (
+            self._is_on and headwater_stage_ft <= self.turn_off_stage
+        )
 
     def reset_state(self):
         """Call before each new scenario run -- hysteresis state must not
@@ -208,15 +227,25 @@ class Pump(Structure):
         return pts[-1][1]
 
     def discharge(self, headwater_stage_ft: float, tailwater_stage_ft: float = 0.0) -> float:
-        if not self.enabled:
+        """Pure read of the CURRENT on/off memory -- see DrainageWell.discharge
+        for why this must not mutate state on a per-call basis."""
+        if not self.enabled or not self._is_on:
             return 0.0
+        return self._rated_cfs(headwater_stage_ft)
+
+    def update_hysteresis(self, headwater_stage_ft: float) -> None:
+        """Commit an on/off transition using an ACCEPTED stage. Call once
+        per time step from the routing loop -- see DrainageWell."""
         if not self._is_on and headwater_stage_ft >= self.turn_on_stage:
             self._is_on = True
         elif self._is_on and headwater_stage_ft <= self.turn_off_stage:
             self._is_on = False
-        if not self._is_on:
-            return 0.0
-        return self._rated_cfs(headwater_stage_ft)
+
+    def would_transition(self, headwater_stage_ft: float) -> bool:
+        """Read-only check -- see DrainageWell.would_transition."""
+        return (not self._is_on and headwater_stage_ft >= self.turn_on_stage) or (
+            self._is_on and headwater_stage_ft <= self.turn_off_stage
+        )
 
     def reset_state(self):
         self._is_on = False

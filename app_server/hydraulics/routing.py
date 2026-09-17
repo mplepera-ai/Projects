@@ -20,7 +20,7 @@ now would risk conflating two sources of error during validation.
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Dict
-from core.numerical_solver import bisection
+from core.numerical_solver import solve_bounded_continuity
 from core.units import CFS_HOUR_TO_ACRE_FT, acre_ft_to_cuft
 from hydraulics.basin import Basin
 from hydraulics.structures import DestinationClassification
@@ -96,6 +96,7 @@ def route_basin(
     try:
         stage = basin.initial_stage_ft
         storage = basin.stage_storage.storage_at_stage(stage)
+        min_storage = basin.stage_storage.storage_at_stage(basin.stage_storage.min_stage)
         results: List[TimeStepResult] = []
 
         total_offsite_acre_ft = 0.0
@@ -105,10 +106,14 @@ def route_basin(
         prev_inflow = inflow_cfs[0]
         prev_stage = stage
         prev_storage = storage
-        prev_total_out = _total_discharge(basin, prev_stage, tailwater_ft=0.0)[0]
+
+        # Commit hysteresis state for the initial stage before anything
+        # else reads it (t=0 record, and the first time step's trials).
+        _commit_hysteresis(basin, stage)
 
         # record t=0
         d0 = _total_discharge(basin, stage, tailwater_ft=0.0)
+        prev_total_out, _prev_by_struct, prev_offsite_cfs, prev_onsite_cfs = d0
         results.append(_make_step(0, inflow_time_hours[0], prev_inflow, stage, storage, d0))
 
         for i in range(1, len(inflow_time_hours)):
@@ -127,22 +132,66 @@ def route_basin(
                 ) * time_step_hours * CFS_HOUR_TO_ACRE_FT
                 return lhs - rhs
 
-            lo = max(basin.stage_storage.min_stage, prev_stage - 5.0)
-            hi = min(basin.stage_storage.max_stage, prev_stage + 5.0)
-            if hi <= lo:
-                hi = lo + 1.0
-            new_stage = bisection(continuity_residual, lo, hi, tol=1e-5)
+            # Search the basin's FULL physical stage range, not a narrow
+            # window around the previous stage -- see solve_bounded_continuity
+            # for why (a fixed-capacity well/pump can legitimately ask to
+            # drain more water than the basin holds, which a narrow window
+            # plus naive bracket expansion would turn into a runaway search
+            # past the curve's defined max stage).
+            new_stage = solve_bounded_continuity(
+                continuity_residual,
+                basin.stage_storage.min_stage,
+                basin.stage_storage.max_stage,
+                tol=1e-5,
+                preferred_stage=prev_stage,
+            )
             new_storage = basin.stage_storage.storage_at_stage(new_stage)
 
+            # Report this step's discharge using the SAME (still frozen,
+            # pre-commit) hysteresis state that continuity_residual used to
+            # solve for new_stage -- not whatever state a transition would
+            # put it in. If a well's on/off memory were updated first, a
+            # transition that only takes effect starting NEXT step (that's
+            # what commit-after-solve means) would get credited to THIS
+            # step's reported/mass-balance discharge despite never having
+            # been part of the equation that produced this step's storage
+            # change -- silently manufacturing water that was never
+            # actually moved. Commit the transition only after this read.
             total_out, by_struct, offsite_cfs, onsite_cfs = _total_discharge(
                 basin, new_stage, tailwater_ft=0.0
             )
+            _commit_hysteresis(basin, new_stage)
+            # If that commit just flipped a structure's on/off memory, the
+            # rate that will govern the NEXT interval (read against the
+            # now-updated state) differs from the rate that governed THIS
+            # interval (total_out/onsite_cfs/offsite_cfs above, read
+            # pre-commit) -- both are physically real readings at the same
+            # instant, on either side of a discontinuous switch. Carrying
+            # the pre-commit reading forward as the next interval's
+            # boundary rate would smear this instant's transitional value
+            # across that whole next interval's trapezoidal integral, the
+            # same ordering bug this module's committing-before-or-after
+            # comment above already fixed for the CURRENT interval -- this
+            # is its mirror image for the NEXT one.
+            total_out_next, _by_struct_next, offsite_next, onsite_next = _total_discharge(
+                basin, new_stage, tailwater_ft=0.0
+            )
+            total_out, by_struct, offsite_cfs, onsite_cfs = _cap_outflow_to_available_water(
+                min_storage, new_storage, S1, I1, I2,
+                prev_total_out, total_out, by_struct, offsite_cfs, onsite_cfs,
+                time_step_hours,
+            )
 
+            # Use the previous step's ACTUAL (already capped, if capping
+            # applied) offsite/onsite flows here, not a fresh recompute
+            # from prev_stage -- recomputing would silently ignore the
+            # availability cap above and overstate the trapezoidal average
+            # whenever a structure was supply-limited on the prior step.
             step_offsite_acre_ft = 0.5 * (
-                _offsite_of(prev_total_out, basin, prev_stage) + offsite_cfs
+                prev_offsite_cfs + offsite_cfs
             ) * time_step_hours * CFS_HOUR_TO_ACRE_FT
             step_onsite_acre_ft = 0.5 * (
-                _onsite_of(prev_total_out, basin, prev_stage) + onsite_cfs
+                prev_onsite_cfs + onsite_cfs
             ) * time_step_hours * CFS_HOUR_TO_ACRE_FT
             step_inflow_acre_ft = 0.5 * (I1 + I2) * time_step_hours * CFS_HOUR_TO_ACRE_FT
 
@@ -155,7 +204,9 @@ def route_basin(
 
             prev_stage = new_stage
             prev_storage = new_storage
-            prev_total_out = total_out
+            prev_total_out = total_out_next
+            prev_offsite_cfs = offsite_next
+            prev_onsite_cfs = onsite_next
             prev_inflow = I2
 
         initial_storage = basin.initial_storage_acre_ft()
@@ -197,6 +248,56 @@ def route_basin(
         # zero-offsite run must never permanently mutate the model.
         for s in basin.structures:
             s.enabled = original_enabled[id(s)]
+
+
+def _commit_hysteresis(basin: Basin, accepted_stage_ft: float) -> None:
+    """Apply on/off transitions for hysteretic structures (wells, pumps)
+    using an ACCEPTED stage only -- never a bisection trial value. See
+    Structure.discharge()/update_hysteresis() docstrings for why this
+    must stay separate from the discharge() calls used during solving."""
+    for s in basin.structures:
+        if hasattr(s, "update_hysteresis"):
+            s.update_hysteresis(accepted_stage_ft)
+
+
+def _cap_outflow_to_available_water(
+    min_storage_acre_ft: float,
+    new_storage_acre_ft: float,
+    prev_storage_acre_ft: float,
+    I1: float,
+    I2: float,
+    prev_total_out: float,
+    total_out: float,
+    by_struct: Dict[str, float],
+    offsite_cfs: float,
+    onsite_cfs: float,
+    time_step_hours: float,
+):
+    """When solving continuity lands a step at (or effectively at) the
+    basin's minimum STORAGE -- which, on a curve with a flat/zero-storage
+    region, can happen at more than one stage, not only the curve's lowest
+    defined stage -- the structures' nominal discharge (e.g. a well's full
+    rated capacity) is not physically realizable: there isn't that much
+    water in the pond plus this step's inflow to give. Reported discharge
+    for that step is scaled down to exactly what conservation allows (each
+    structure's share of the total preserved, only the total capped), so
+    mass-balance and per-structure hydrographs never claim more water
+    leaving the basin than actually flowed through it."""
+    if new_storage_acre_ft > min_storage_acre_ft + 1e-9 or total_out <= 0:
+        return total_out, by_struct, offsite_cfs, onsite_cfs
+
+    storage_diff = new_storage_acre_ft - prev_storage_acre_ft
+    available_total_out = (
+        (I1 + I2) - prev_total_out
+        - 2.0 * storage_diff / (time_step_hours * CFS_HOUR_TO_ACRE_FT)
+    )
+    available_total_out = max(0.0, available_total_out)
+    if available_total_out >= total_out:
+        return total_out, by_struct, offsite_cfs, onsite_cfs
+
+    factor = available_total_out / total_out
+    capped_by_struct = {name: q * factor for name, q in by_struct.items()}
+    return available_total_out, capped_by_struct, offsite_cfs * factor, onsite_cfs * factor
 
 
 def _total_discharge(basin: Basin, stage_ft: float, tailwater_ft: float):
