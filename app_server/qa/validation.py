@@ -50,6 +50,7 @@ def run_qa(
     findings.extend(_check_zero_offsite_compliance(results))
     findings.extend(_check_100y_zod_scenario_present(project))
     findings.extend(_check_existing_vs_proposed_direction(results))
+    findings.extend(_check_berm_overtopped(project, results))
 
     return findings
 
@@ -131,6 +132,34 @@ def _check_existing_vs_proposed_direction(results: Dict[str, ScenarioRunResult])
                 f"{row.difference_ft:.3f} ft. Check perimeter-grade/containment criteria.",
                 f"event {row.event_code}, basin {row.basin_id}",
             ))
+    return findings
+
+
+def _check_berm_overtopped(project: Project, results: Dict[str, ScenarioRunResult]) -> List[Finding]:
+    """Berm/perimeter containment (raised alongside the Miami-Dade DERM
+    comparison): a basin's berm elevation isn't a routed structure, so
+    nothing else in the engine checks it. No universal regulatory
+    minimum freeboard was found to check against (varies by
+    jurisdiction/reviewer), so freeboard itself is reported as a plain
+    output value (see api/adapter.py's freeboardFt) rather than
+    checked here -- the only thing this check flags is outright
+    overtopping (freeboard < 0), which is unambiguous regardless of
+    what freeboard a given reviewer wants."""
+    findings = []
+    for sid, r in results.items():
+        basins = project.conditions[r.scenario.condition_name].network.basins
+        for bid, peak_stage in r.network_result.peak_stage_ft.items():
+            berm = basins[bid].berm_elevation_ft
+            if berm is None:
+                continue
+            freeboard = berm - peak_stage
+            if freeboard < 0:
+                findings.append(Finding(
+                    Level.CRITICAL,
+                    f"Berm overtopped: peak stage ({peak_stage:.3f} ft) exceeds the berm "
+                    f"elevation ({berm:.3f} ft) by {-freeboard:.3f} ft.",
+                    f"scenario {sid}, basin {bid}",
+                ))
     return findings
 
 
