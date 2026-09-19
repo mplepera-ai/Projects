@@ -169,6 +169,8 @@ def _add_exfiltration_sheet(wb: Workbook, trench: ExfiltrationTrench, required_w
         ("W, trench width (ft)", trench.trench_width_ft),
         ("Vwq, required WQ volume (ac-in)", required_wq_volume_cuft / 3630.0),
         ("Provided trench length (LF)", trench.actual_trench_length_ft),
+        ("Trench height, H (ft)", trench.trench_height_ft),
+        ("Pipe diameter (in, 0 = none)", trench.pipe_diameter_in or 0.0),
     ]
     row = 5
     for label, value in inputs:
@@ -177,7 +179,7 @@ def _add_exfiltration_sheet(wb: Workbook, trench: ExfiltrationTrench, required_w
         cell.font = BLUE_INPUT
         row += 1
 
-    K, FS, PCTWQ, H2, HEFF, DU, DS, W, VWQ, PROVIDED = (f"B{5+i}" for i in range(10))
+    K, FS, PCTWQ, H2, HEFF, DU, DS, W, VWQ, PROVIDED, HGT, PIPEDIA = (f"B{5+i}" for i in range(12))
 
     r = row + 1
     ws.cell(row=r, column=1, value="Denominator (L1, standard)")
@@ -202,6 +204,24 @@ def _add_exfiltration_sheet(wb: Workbook, trench: ExfiltrationTrench, required_w
     r += 1
     ws.cell(row=r, column=1, value="STATUS").font = BOLD
     ws.cell(row=r, column=2, value=f'=IF({PROVIDED}>=B{gov_row},"PASS","FAIL")').font = BOLD
+
+    r += 2
+    ws.cell(row=r, column=1, value="Rock Volume (construction quantity -- not part of sizing above)").font = Font(italic=True, size=9)
+    r += 1
+    ws.cell(row=r, column=1, value="Pipe cross-section area (SF)")
+    ws.cell(row=r, column=2, value=f"=PI()*({PIPEDIA}/12/2)^2")
+    pipe_area_row = r
+    r += 1
+    ws.cell(row=r, column=1, value="Gross trench volume, W*H*L (CF)")
+    ws.cell(row=r, column=2, value=f"={W}*{HGT}*{PROVIDED}")
+    gross_row = r
+    r += 1
+    ws.cell(row=r, column=1, value="Rock Volume (CF)").font = BOLD
+    ws.cell(row=r, column=2, value=f"=MAX(B{gross_row}-B{pipe_area_row}*{PROVIDED},0)").font = BOLD
+    rock_cf_row = r
+    r += 1
+    ws.cell(row=r, column=1, value="Rock Volume (CY)").font = BOLD
+    ws.cell(row=r, column=2, value=f"=B{rock_cf_row}/27").font = BOLD
 
     _autosize(ws, 2, 42)
     return ws

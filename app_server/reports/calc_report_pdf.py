@@ -179,5 +179,18 @@ def export_swale_exfiltration_calc_pdf(
             for w in report["warnings"]:
                 story.append(Paragraph(f"&bull; {w}", styles["CalcBody"]))
 
+        if report.get("pipe_diameter_in"):
+            story.append(Spacer(1, 0.15 * inch))
+            story.append(Paragraph("Rock Volume (construction quantity -- not part of the sizing above)", styles["CalcHeading"]))
+            rock_rows = [
+                ["Pipe Diameter (in)", f"{report['pipe_diameter_in']:.1f}"],
+                ["Trench W x H x L (ft)", f"{report['width_ft']:.2f} x {report['height_ft']:.2f} x {report['provided_length_ft']:.1f}"],
+                ["Rock Volume (CF)", f"{report['rock_volume_cuft']:,.0f}"],
+                ["Rock Volume (CY)", f"{report['rock_volume_cy']:,.1f}"],
+            ]
+            t4 = Table([["Parameter", "Value"]] + rock_rows, hAlign="LEFT", colWidths=[2.6 * inch, 2.6 * inch])
+            t4.setStyle(_table_style())
+            story.append(t4)
+
     doc.build(story)
     return output_path

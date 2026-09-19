@@ -82,18 +82,25 @@ def comparison_summary_markdown(results: Dict[str, ScenarioRunResult]) -> str:
     return "\n".join(lines)
 
 
-def final_model_summary_table(results: Dict[str, ScenarioRunResult]) -> str:
-    """Section 57: a scannable one-page table across all scenarios/basins."""
+def final_model_summary_table(project: Project, results: Dict[str, ScenarioRunResult]) -> str:
+    """Section 57: a scannable one-page table across all scenarios/basins.
+    Freeboard (berm elevation minus peak stage) is included as a plain
+    output value only for basins with a berm elevation entered -- see
+    hydraulics/basin.py's Basin.berm_elevation_ft docstring for why this
+    isn't checked against a required minimum here."""
     lines = ["## Final Model Summary", "",
-             "| Scenario | Condition | Event | Basin | Peak Stage (ft) | Offsite Discharge (ac-ft) | ZOD |",
-             "|---|---|---|---|---|---|---|"]
+             "| Scenario | Condition | Event | Basin | Peak Stage (ft) | Offsite Discharge (ac-ft) | ZOD | Freeboard (ft) |",
+             "|---|---|---|---|---|---|---|---|"]
     for sid, r in sorted(results.items()):
+        basins = project.conditions[r.scenario.condition_name].network.basins
         for bid in r.network_result.peak_stage_ft:
             peak = r.network_result.peak_stage_ft[bid]
             offsite = r.network_result.mass_balance[bid].offsite_discharge_acre_ft
+            berm = basins[bid].berm_elevation_ft
+            freeboard = f"{berm - peak:.3f}" if berm is not None else "—"
             lines.append(
                 f"| {sid} | {r.scenario.condition_name} | {r.scenario.event_code} | {bid} | "
-                f"{peak:.3f} | {offsite:.4f} | {r.scenario.zero_offsite_discharge} |"
+                f"{peak:.3f} | {offsite:.4f} | {r.scenario.zero_offsite_discharge} | {freeboard} |"
             )
     return "\n".join(lines)
 
@@ -142,7 +149,7 @@ def permit_summary_markdown(
         ])
 
     if options.include_final_summary_table:
-        lines.extend([final_model_summary_table(results), ""])
+        lines.extend([final_model_summary_table(project, results), ""])
 
     if options.include_comparison_table:
         lines.extend([comparison_summary_markdown(results), ""])

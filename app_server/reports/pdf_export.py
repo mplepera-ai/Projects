@@ -82,20 +82,32 @@ def _permit_criteria_section(project: Project, styles) -> List:
     return story
 
 
-def _summary_table(results: Dict[str, ScenarioRunResult], styles) -> List:
+def _summary_table(project: Project, results: Dict[str, ScenarioRunResult], styles) -> List:
+    # Freeboard (berm elevation minus peak stage) is a plain output value,
+    # only shown for basins with a berm elevation entered -- see
+    # hydraulics/basin.py's Basin.berm_elevation_ft docstring for why
+    # this isn't checked against a required minimum here.
     story = [Paragraph("Final Model Summary", styles["SectionHeading"])]
-    header = ["Scenario", "Condition", "Event", "Basin", "Peak Stage (ft)", "Offsite Disch. (ac-ft)", "ZOD"]
+    header = ["Scenario", "Condition", "Event", "Basin", "Peak Stage (ft)", "Offsite Disch. (ac-ft)", "ZOD", "Freeboard (ft)"]
     rows = [header]
     for sid, r in sorted(results.items()):
+        basins = project.conditions[r.scenario.condition_name].network.basins
         for bid in r.network_result.peak_stage_ft:
             peak = r.network_result.peak_stage_ft[bid]
             offsite = r.network_result.mass_balance[bid].offsite_discharge_acre_ft
+            berm = basins[bid].berm_elevation_ft
+            freeboard = f"{berm - peak:.3f}" if berm is not None else "—"
             rows.append([
                 sid, r.scenario.condition_name, r.scenario.event_code, bid,
-                f"{peak:.3f}", f"{offsite:.4f}", "Yes" if r.scenario.zero_offsite_discharge else "No",
+                f"{peak:.3f}", f"{offsite:.4f}", "Yes" if r.scenario.zero_offsite_discharge else "No", freeboard,
             ])
     table = Table(rows, repeatRows=1, hAlign="LEFT")
-    table.setStyle(_table_style())
+    style_cmds = _table_style_commands()
+    for i, row in enumerate(rows[1:], start=1):
+        freeboard_str = row[-1]
+        if freeboard_str != "—" and float(freeboard_str) < 0:
+            style_cmds.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#F8D7DA")))
+    table.setStyle(TableStyle(style_cmds))
     story.append(table)
     return story
 
@@ -197,7 +209,7 @@ def export_permit_report_pdf(
         story.extend(_permit_criteria_section(project, styles))
         story.append(Spacer(1, 0.2 * inch))
     if options.include_final_summary_table:
-        story.extend(_summary_table(results, styles))
+        story.extend(_summary_table(project, results, styles))
         story.append(Spacer(1, 0.25 * inch))
     if options.include_comparison_table:
         story.extend(_comparison_table(results, styles))
