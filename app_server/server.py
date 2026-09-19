@@ -34,6 +34,7 @@ from flask import Flask, request, jsonify, send_file, Response
 from api.adapter import (
     run_project, build_project_from_app_json, build_report_options, AdapterError,
     run_storage_calcs, build_storage_objects, merge_swale_storage_into_basin,
+    suggest_trench_options, suggest_pond_options,
 )
 from reports.pdf_export import export_permit_report_pdf
 from reports.generator import permit_summary_markdown
@@ -121,6 +122,30 @@ def api_calc_storage():
     try:
         data = request.get_json(force=True)
         return jsonify(run_storage_calcs(data))
+    except (AdapterError, KeyError) as e:
+        return jsonify({"error": f"Missing or invalid input: {e}"}), 400
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"Server error: {e}"}), 500
+
+
+@app.route("/api/calc/trench-suggest", methods=["POST"])
+def api_trench_suggest():
+    try:
+        data = request.get_json(force=True)
+        return jsonify(suggest_trench_options(data))
+    except (AdapterError, KeyError) as e:
+        return jsonify({"error": f"Missing or invalid input: {e}"}), 400
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"Server error: {e}"}), 500
+
+
+@app.route("/api/calc/pond-suggest", methods=["POST"])
+def api_pond_suggest():
+    try:
+        data = request.get_json(force=True)
+        return jsonify(suggest_pond_options(data))
     except (AdapterError, KeyError) as e:
         return jsonify({"error": f"Missing or invalid input: {e}"}), 400
     except Exception as e:

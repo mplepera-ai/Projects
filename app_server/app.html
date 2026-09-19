@@ -21,6 +21,23 @@
     --green-bg: #E4F0E9;
     --mono: 'IBM Plex Mono', monospace;
     --sans: 'IBM Plex Sans', sans-serif;
+
+    /* Hydrograph chart palette -- categorical slots 1/2/3(/4) from the
+       validated dataviz reference palette (references/palette.md):
+       worst adjacent CVD Delta E 9.1, worst adjacent normal-vision
+       Delta E 19.6 (both >= the 8/15 targets); slots 1-3 additionally
+       clear the stricter all-pairs floors. Chart chrome (grid/axis/
+       surface/ink) reuses this app's own paper tokens above rather than
+       the skill's separate light-mode chrome, so the charts sit
+       visually inside this app rather than looking like a pasted-in
+       widget. */
+    --hg-series-1: #2a78d6; /* blue -- inflow / stage */
+    --hg-series-2: #eb6834; /* orange -- offsite discharge */
+    --hg-series-3: #1baf7a; /* aqua -- onsite disposal */
+    --hg-series-4: #eda100; /* yellow -- interbasin net (rare, multi-basin only) */
+    --hg-surface: var(--paper-panel);
+    --hg-grid: #E1E0D9;
+    --hg-axis: var(--line);
   }
 
   * { box-sizing: border-box; }
@@ -177,6 +194,37 @@
   .checkbox-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13.5px; }
   .checkbox-row input { width: 16px; height: 16px; }
 
+  .input-with-note { display: flex; align-items: center; gap: 10px; }
+  .input-with-note input { flex: 1 1 auto; }
+  .cf-note { font-family: var(--mono); font-size: 11.5px; color: #5B6472; white-space: nowrap; }
+
+  tr.recommended-row { background: var(--green-bg); }
+  tr.overtopped-row { background: var(--red-bg); }
+
+  .hg-chart-card {
+    background: var(--hg-surface); border: 1px solid var(--line);
+    padding: 14px 16px 6px; margin-bottom: 16px;
+  }
+  .hg-chart-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 4px; }
+  .hg-chart-title { font-size: 13px; font-weight: 600; color: var(--ink); }
+  .hg-legend { display: flex; gap: 14px; flex-wrap: wrap; }
+  .hg-legend-item { font-size: 11.5px; color: #5B6472; display: inline-flex; align-items: center; gap: 6px; }
+  .hg-legend-swatch { width: 12px; height: 2px; display: inline-block; border-radius: 1px; }
+  .hg-svg { display: block; max-width: 100%; cursor: crosshair; }
+  .hg-axis-label { font-family: var(--mono); font-size: 10px; fill: #898781; }
+  .hg-axis-title { font-family: var(--sans); font-size: 10.5px; fill: #5B6472; }
+  .hg-peak-label { font-family: var(--sans); font-size: 10.5px; fill: var(--ink); font-weight: 600; }
+  .hg-tooltip {
+    position: absolute; top: 8px; background: var(--ink); color: #fff;
+    padding: 8px 10px; border-radius: 3px; font-size: 11.5px; line-height: 1.5;
+    pointer-events: none; min-width: 150px; box-shadow: 0 2px 8px rgba(0,0,0,0.25); z-index: 5;
+  }
+  .hg-tooltip-time { font-family: var(--mono); font-size: 10.5px; color: #C7CCC4; margin-bottom: 3px; }
+  .hg-tooltip-row { display: flex; align-items: center; gap: 6px; }
+  .hg-tooltip-key { width: 10px; height: 2px; display: inline-block; flex: 0 0 auto; }
+  .hg-tooltip-val { font-family: var(--mono); font-weight: 600; }
+  .hg-tooltip-name { color: #C7CCC4; }
+
   .report-preview {
     background: var(--paper-panel); border: 1px solid var(--line); padding: 32px;
     font-family: var(--mono); font-size: 12px; line-height: 1.6; white-space: pre-wrap;
@@ -230,6 +278,8 @@
     <button data-tab="run"><span class="rail-num">05</span>Run Model</button>
     <button data-tab="results"><span class="rail-num">06</span>Results</button>
     <button data-tab="reports"><span class="rail-num">07</span>Reports</button>
+    <button data-tab="compare"><span class="rail-num">08</span>Compare Designs</button>
+    <button data-tab="hydrograph"><span class="rail-num">09</span>Hydrograph</button>
 
     <div class="rail-file">
       <div class="rail-file-label">Project File</div>
@@ -310,6 +360,12 @@
     <!-- ===================== STORAGE & WATER QUALITY ===================== -->
     <section class="panel" id="panel-storage"></section>
 
+    <!-- ===================== COMPARE DESIGNS ===================== -->
+    <section class="panel" id="panel-compare"></section>
+
+    <!-- ===================== HYDROGRAPH ===================== -->
+    <section class="panel" id="panel-hydrograph"></section>
+
   </main>
 </div>
 
@@ -324,6 +380,7 @@ const state = {
       activeBasinId: "SITE",
       basins: {
         SITE: { name: "Existing Site", areaAcres: 12.0, groundStorageIn: 3.0, tcHours: 0.30, initialStageFt: 5.0,
+          bermElevationFt: "",
           stagePoints: [[5.00,0.00],[5.40,0.00],[6.00,1.80],[7.00,5.10],[8.00,9.60],[9.00,15.80]],
           structures: [ {kind:"weir", name:"Existing Outfall", crestElevationFt:6.80, lengthFt:6.0, c:3.1, destination:"OFFSITE_DISCHARGE", enabled:true} ] },
       },
@@ -333,6 +390,7 @@ const state = {
       activeBasinId: "SITE",
       basins: {
         SITE: { name: "Proposed Site", areaAcres: 12.0, groundStorageIn: 2.5, tcHours: 0.25, initialStageFt: 5.0,
+          bermElevationFt: "",
           stagePoints: [[5.00,0.00],[5.40,0.00],[6.00,2.40],[7.00,6.30],[8.00,11.20],[9.00,17.90]],
           structures: [
             {kind:"well", name:"Proposed Well W-1", capacityGpm:210, turnOnStage:5.5, turnOffStage:5.4, destination:"ONSITE_DISPOSAL", enabled:true},
@@ -346,19 +404,31 @@ const state = {
   comparison: null,
   findings: null,
   storageWQ: {
-    siteAreas: { existingSiteSqft: "", existingPerviousSqft: "", proposedSiteSqft: "", proposedPerviousSqft: "" },
+    siteAreas: { existingSiteSqft: "", existingPerviousSqft: "", proposedSiteSqft: "", proposedPerviousSqft: "",
+      proposedSameAsExisting: false },
     soilStorage: { existingCompactedIn: "", proposedCompactedIn: "", rainfallIn: "" },
     swales: [],
-    waterQuality: { method: "legacy_volumetric", projectAreaAcres: "", imperviousFraction: "",
+    waterQuality: { method: "legacy_volumetric", projectAreaAcres: "", projectAreaAutoSync: true, imperviousFraction: "",
       dryDetentionCreditAcIn: 0, retentionCreditAcIn: 0, pretreatmentVolumeAcIn: 0, providedVolumeAcIn: 0,
       customRequiredVolumeAcIn: 0 },
     exfiltration: { name: "Exfiltration Trench ET-1", controlElevationFt: "", designWaterTableFt: "",
       trenchTopElevationFt: "", trenchBottomElevationFt: "", pipeInvertElevationFt: "",
       lowestOverflowElevationFt: "", designWaterSurfaceFt: "", trenchWidthFt: "", actualTrenchLengthFt: "",
-      hydraulicConductivityK: "", factorOfSafety: 2.0, h2Method: "SFWMD_STANDARD", userDefinedH2Ft: "",
-      effectiveHeadFt: "", percentWqRequired: 1.0, requiredVolumeBasis: "waterQuality" },
+      hydraulicConductivityK: "", pipeDiameterIn: "", factorOfSafety: 2.0, h2Method: "SFWMD_STANDARD",
+      userDefinedH2Ft: "", effectiveHeadFt: "", percentWqRequired: 1.0, requiredVolumeBasis: "waterQuality",
+      suggestMinWidthFt: 2.0, suggestMaxWidthFt: 12.0, suggestWidthStepFt: 0.5, suggestAvailableLengthFt: "" },
+    pondSizing: { requiredVolumeCuft: "", depthFt: "", sideSlopeHPerV: 4.0, lengthToWidthRatio: 1.5 },
   },
   storageResults: null,
+  trenchSuggestResults: null,
+  pondSuggestResult: null,
+  hydrographSelection: { scenarioId: null, basinId: null },
+  // Named snapshots of {basins, storageWQ} for side-by-side comparison --
+  // see the Compare Designs panel. Each entry is a deep, independent copy
+  // (not a live reference), so editing the current workspace never
+  // changes a saved design, and vice versa.
+  savedDesigns: [],
+  compareResults: null,
 };
 
 function renderBasinPanel(key, label) {
@@ -388,6 +458,14 @@ function renderBasinPanel(key, label) {
     <div class="field-row"><label>Ground storage (in)</label><input data-f="groundStorageIn" value="${b.groundStorageIn}"></div>
     <div class="field-row"><label>Time of concentration (hr)</label><input data-f="tcHours" value="${b.tcHours}"></div>
     <div class="field-row"><label>Initial stage (ft NAVD)</label><input data-f="initialStageFt" value="${b.initialStageFt}"></div>
+    <div class="field-row"><label>Berm/containment elevation (ft NAVD)</label>
+      <input data-f="bermElevationFt" placeholder="optional -- for freeboard output only" value="${b.bermElevationFt ?? ""}">
+    </div>
+    <p class="section-note" style="margin-top:-6px;">Perimeter berm/containment crest around this basin, if any --
+      not a routed structure (doesn't affect the water budget). When set, the run results report freeboard
+      (berm elevation &minus; peak stage) as a plain output value for each storm event, and flag it as a
+      CRITICAL finding only if the berm is actually overtopped (freeboard &lt; 0) -- no minimum freeboard is
+      enforced since none was specified for this project.</p>
 
     <h2>Stage-Storage Curve</h2>
     <table id="stage-table-${key}">
@@ -462,6 +540,7 @@ function renderBasinPanel(key, label) {
     do { newId = "B" + n; n++; } while (cond.basins[newId]);
     cond.basins[newId] = {
       name: "New Basin", areaAcres: 1.0, groundStorageIn: 2.0, tcHours: 0.2, initialStageFt: b.initialStageFt,
+      bermElevationFt: "",
       stagePoints: [
         [b.initialStageFt, 0.0], [b.initialStageFt + 1, 0.5], [b.initialStageFt + 2, 2.0],
         [b.initialStageFt + 4, 6.0], [b.initialStageFt + 6, 12.0], [b.initialStageFt + 10, 25.0],
@@ -748,12 +827,13 @@ function renderResults() {
   const el = document.getElementById("results-content");
   if (!state.results) { el.innerHTML = `<p class="muted">Run the model first.</p>`; return; }
 
-  const rows = state.results.flatMap(r => r.basins.map(bs => `<tr>
+  const rows = state.results.flatMap(r => r.basins.map(bs => `<tr class="${bs.freeboardFt != null && bs.freeboardFt < 0 ? "overtopped-row" : ""}">
     <td>${r.scenarioId}</td><td>${r.condition}</td><td>${r.eventLabel}</td><td>${bs.basinId}</td>
     <td class="num">${bs.peakStageFt.toFixed(3)}</td>
     <td class="num">${bs.massBalance.offsiteAF.toFixed(4)}</td>
     <td class="num">${r.networkTotalOffsiteAF.toFixed(4)}</td>
     <td>${r.zod ? "Yes" : "No"}</td>
+    <td class="num">${bs.freeboardFt != null ? bs.freeboardFt.toFixed(3) : "&mdash;"}</td>
   </tr>`)).join("");
 
   const compareRows = state.comparison.map(c => {
@@ -774,9 +854,13 @@ function renderResults() {
     <h2>Final Model Summary</h2>
     <p class="section-note">One row per basin per scenario. "Network Offsite" is the total across all basins in that scenario -- the number the zero-offsite-discharge compliance check actually applies to (Section 37).</p>
     <table>
-      <tr><th>Scenario</th><th>Condition</th><th>Event</th><th>Basin</th><th class="num">Peak Stage (ft)</th><th class="num">Basin Offsite (ac-ft)</th><th class="num">Network Offsite (ac-ft)</th><th>ZOD</th></tr>
+      <tr><th>Scenario</th><th>Condition</th><th>Event</th><th>Basin</th><th class="num">Peak Stage (ft)</th><th class="num">Basin Offsite (ac-ft)</th><th class="num">Network Offsite (ac-ft)</th><th>ZOD</th><th class="num">Freeboard (ft)</th></tr>
       ${rows}
     </table>
+    <p class="section-note">Freeboard (berm elevation minus peak stage) only shows for basins with a Berm/containment
+      elevation entered on that basin's tab -- it's reported as a plain value, not checked against a required
+      minimum (none was specified for this project). A row highlighted red means the berm is overtopped
+      (freeboard &lt; 0); see Findings below for the corresponding CRITICAL flag.</p>
 
     <h2>Existing vs. Proposed Comparison</h2>
     <table>
@@ -879,6 +963,7 @@ function collectProjectData() {
     },
     basins: state.basins,
     storageWQ: state.storageWQ,
+    savedDesigns: state.savedDesigns,
   };
 }
 
@@ -933,9 +1018,15 @@ function applyProjectData(data) {
   }
 
   if (data.storageWQ) {
-    state.storageWQ = data.storageWQ;
+    state.storageWQ = mergeStorageWQDefaults(data.storageWQ);
+    state.trenchSuggestResults = null;
+    state.pondSuggestResult = null;
     renderStoragePanel();
   }
+
+  state.savedDesigns = data.savedDesigns || [];
+  state.compareResults = null;
+  renderComparePanel();
 
   // Loading a different project invalidates any prior run -- Section 63:
   // changing inputs invalidates prior results, and a freshly loaded file
@@ -977,6 +1068,8 @@ document.querySelectorAll(".rail button[data-tab]").forEach(btn => {
     document.getElementById("panel-" + btn.dataset.tab).classList.add("active");
     // Basins can be added/renamed on other tabs -- keep this dropdown current.
     if (btn.dataset.tab === "storage") populateMergeTargetBasinOptions();
+    if (btn.dataset.tab === "compare") renderComparePanel();
+    if (btn.dataset.tab === "hydrograph") renderHydrographPanel();
   });
 });
 
@@ -1003,11 +1096,15 @@ function renderStoragePanel() {
       <tr><th></th><th class="num">Existing</th><th class="num">Proposed</th></tr>
       <tr><td>Site Area (SF)</td>
         <td class="num"><input data-sa="existingSiteSqft" value="${s.siteAreas.existingSiteSqft}"></td>
-        <td class="num"><input data-sa="proposedSiteSqft" value="${s.siteAreas.proposedSiteSqft}"></td></tr>
+        <td class="num"><input data-sa="proposedSiteSqft" ${s.siteAreas.proposedSameAsExisting ? "disabled" : ""}
+          value="${s.siteAreas.proposedSameAsExisting ? s.siteAreas.existingSiteSqft : s.siteAreas.proposedSiteSqft}"></td></tr>
       <tr><td>Pervious Area (SF)</td>
         <td class="num"><input data-sa="existingPerviousSqft" value="${s.siteAreas.existingPerviousSqft}"></td>
-        <td class="num"><input data-sa="proposedPerviousSqft" value="${s.siteAreas.proposedPerviousSqft}"></td></tr>
+        <td class="num"><input data-sa="proposedPerviousSqft" ${s.siteAreas.proposedSameAsExisting ? "disabled" : ""}
+          value="${s.siteAreas.proposedSameAsExisting ? s.siteAreas.existingPerviousSqft : s.siteAreas.proposedPerviousSqft}"></td></tr>
     </table>
+    <div class="checkbox-row"><input type="checkbox" id="sa-same-as-existing" ${s.siteAreas.proposedSameAsExisting ? "checked" : ""}>
+      <label for="sa-same-as-existing">Proposed same as Existing (in-place redevelopment -- enter the area once instead of twice)</label></div>
 
     <h2>Soil Storage (SCS Storage Method)</h2>
     <p class="section-note">R = (P - 0.2S)&sup2; / (P + 0.8S) &nbsp; V = Area &times; R / 12</p>
@@ -1034,12 +1131,54 @@ function renderStoragePanel() {
 
     <h2>Water Quality (Legacy SFWMD Volumetric Method)</h2>
     <p class="section-note">Required Volume = greater of (1.0 in &times; site area) or (2.5 in &times; impervious fraction &times; site area), minus credits below.</p>
-    <div class="field-row"><label>Project area (acres)</label><input data-wq="projectAreaAcres" value="${s.waterQuality.projectAreaAcres}"></div>
-    <div class="field-row"><label>Impervious fraction (0-1)</label><input data-wq="imperviousFraction" value="${s.waterQuality.imperviousFraction}"></div>
-    <div class="field-row"><label>Dry detention credit (ac-in)</label><input data-wq="dryDetentionCreditAcIn" value="${s.waterQuality.dryDetentionCreditAcIn}"></div>
-    <div class="field-row"><label>Retention credit (ac-in)</label><input data-wq="retentionCreditAcIn" value="${s.waterQuality.retentionCreditAcIn}"></div>
-    <div class="field-row"><label>Pretreatment volume (ac-in)</label><input data-wq="pretreatmentVolumeAcIn" value="${s.waterQuality.pretreatmentVolumeAcIn}"></div>
-    <div class="field-row"><label>Provided volume (ac-in)</label><input data-wq="providedVolumeAcIn" value="${s.waterQuality.providedVolumeAcIn}"></div>
+    <div class="help-layout">
+      <div class="help-fields">
+        <div class="field-row"><label>Project area (acres)</label>
+          <input data-wq="projectAreaAcres" id="wq-auto-area-display" ${s.waterQuality.projectAreaAutoSync ? "disabled" : ""}
+            value="${s.waterQuality.projectAreaAutoSync ? _autoProjectAreaDisplay(s) : s.waterQuality.projectAreaAcres}">
+        </div>
+        <div class="checkbox-row"><input type="checkbox" id="wq-area-autosync" ${s.waterQuality.projectAreaAutoSync ? "checked" : ""}>
+          <label for="wq-area-autosync">Auto from Proposed Site Area above (uncheck to enter a different project/parcel area)</label></div>
+        <div class="field-row"><label>Impervious fraction (0-1)</label><input data-wq="imperviousFraction" value="${s.waterQuality.imperviousFraction}"></div>
+        <div class="field-row"><label>Dry detention credit (ac-in)</label>
+          <span class="input-with-note"><input data-wq="dryDetentionCreditAcIn" value="${s.waterQuality.dryDetentionCreditAcIn}">
+            <span class="cf-note" data-cf-for="dryDetentionCreditAcIn">= ${acInToCf(s.waterQuality.dryDetentionCreditAcIn)} CF</span></span>
+        </div>
+        <div class="field-row"><label>Retention credit (ac-in)</label>
+          <span class="input-with-note"><input data-wq="retentionCreditAcIn" value="${s.waterQuality.retentionCreditAcIn}">
+            <span class="cf-note" data-cf-for="retentionCreditAcIn">= ${acInToCf(s.waterQuality.retentionCreditAcIn)} CF</span></span>
+        </div>
+        <div class="field-row"><label>Pretreatment volume (ac-in)</label>
+          <span class="input-with-note"><input data-wq="pretreatmentVolumeAcIn" value="${s.waterQuality.pretreatmentVolumeAcIn}">
+            <span class="cf-note" data-cf-for="pretreatmentVolumeAcIn">= ${acInToCf(s.waterQuality.pretreatmentVolumeAcIn)} CF</span></span>
+        </div>
+        <div class="field-row"><label>Provided volume (ac-in)</label>
+          <span class="input-with-note"><input data-wq="providedVolumeAcIn" value="${s.waterQuality.providedVolumeAcIn}">
+            <span class="cf-note" data-cf-for="providedVolumeAcIn">= ${acInToCf(s.waterQuality.providedVolumeAcIn)} CF</span></span>
+        </div>
+      </div>
+      <div class="help-sidebar">
+        <div class="help-block">
+          <div class="help-title">Credit Definitions</div>
+          <p style="margin:0 0 8px 0;"><b>Dry Detention Credit</b> &mdash; volume credit for a dry detention
+            area that temporarily holds and slowly releases part of the water quality volume before it
+            leaves the site, reducing the net volume this calculation must additionally provide.</p>
+          <p style="margin:0 0 8px 0;"><b>Retention Credit</b> &mdash; volume credit for stormwater retained
+            onsite by a feature other than the swales/trench modeled elsewhere on this tab (e.g. a
+            dedicated retention area), applied against the required volume the same way.</p>
+          <p style="margin:0;"><b>Pretreatment Volume</b> &mdash; volume credit for a separate pretreatment
+            structure (e.g. a baffle box or sump) that already treats part of the runoff upstream,
+            reducing the volume this calculation must additionally provide.</p>
+        </div>
+        <div class="help-block">
+          <div class="help-title">Why these show in CF too</div>
+          <p style="margin:0;">The credits and volumes above are entered in acre-inches (ac-in), the legacy
+            SFWMD volumetric method's native unit, but the CF figure next to each field is the same volume
+            in cubic feet (1 ac-in = 3,630 CF) -- useful for comparing directly against the swale and
+            exfiltration trench volumes elsewhere on this tab, which are all in CF.</p>
+        </div>
+      </div>
+    </div>
 
     <h2>Exfiltration Trench</h2>
     <p class="section-note">Automatically uses the conservative (L2) equation when Ds&gt;Du or W&gt;2(Du+Ds), matching Section 22.</p>
@@ -1055,6 +1194,7 @@ function renderStoragePanel() {
         <div class="field-row"><label>Trench width, W (ft)</label><input data-ex="trenchWidthFt" value="${s.exfiltration.trenchWidthFt}"></div>
         <div class="field-row"><label>Provided trench length (ft)</label><input data-ex="actualTrenchLengthFt" value="${s.exfiltration.actualTrenchLengthFt}"></div>
         <div class="field-row"><label>K (cfs/ft&sup2;-ft)</label><input data-ex="hydraulicConductivityK" value="${s.exfiltration.hydraulicConductivityK}"></div>
+        <div class="field-row"><label>Pipe size (in)</label><input data-ex="pipeDiameterIn" placeholder="optional -- for rock volume only" value="${s.exfiltration.pipeDiameterIn}"></div>
         <div class="field-row"><label>Factor of safety</label><input data-ex="factorOfSafety" value="${s.exfiltration.factorOfSafety}"></div>
         <div class="field-row"><label>%WQ required (0-1)</label><input data-ex="percentWqRequired" value="${s.exfiltration.percentWqRequired}"></div>
         <div class="field-row"><label>H2 method</label>
@@ -1103,6 +1243,42 @@ function renderStoragePanel() {
       </div>
     </div>
 
+    <h2>Trench Width/Length Suggestion</h2>
+    <p class="section-note">Holds every input above fixed except trench width, and tries a range of widths to
+      find the width/length combination that meets the required treatment volume with the least rock (#57
+      stone) fill -- a real cost driver independent of the hydraulic sizing above. Fill in the Exfiltration
+      Trench section above first (elevations, K, FS, ...); this reuses those inputs and only varies width.</p>
+    <div class="field-row"><label>Min width (ft)</label><input data-tg="suggestMinWidthFt" value="${s.exfiltration.suggestMinWidthFt}"></div>
+    <div class="field-row"><label>Max width (ft)</label><input data-tg="suggestMaxWidthFt" value="${s.exfiltration.suggestMaxWidthFt}"></div>
+    <div class="field-row"><label>Width step (ft)</label><input data-tg="suggestWidthStepFt" value="${s.exfiltration.suggestWidthStepFt}"></div>
+    <div class="field-row"><label>Available length (ft)</label>
+      <input data-tg="suggestAvailableLengthFt" placeholder="optional -- e.g. site perimeter available for trench"
+        value="${s.exfiltration.suggestAvailableLengthFt}">
+    </div>
+    <div class="toolbar">
+      <button class="btn secondary" id="btn-suggest-trench">Suggest Trench Widths</button>
+    </div>
+    <div id="trench-suggest-results"></div>
+
+    <h2>Pond Sizing (Quick Footprint Estimate)</h2>
+    <p class="section-note">Solves for the bottom footprint (holding a length/width ratio and uniform side
+      slope fixed) that provides at least the required storage volume at the given depth, using the standard
+      prismoidal (truncated-pyramid) volume formula. This is a planning-level estimate -- once a footprint
+      looks workable, model it as a real basin (or import its stage-storage curve) so the routing engine
+      actually sees it.</p>
+    <div class="field-row"><label>Required volume (CF)</label><input data-pd="requiredVolumeCuft" value="${s.pondSizing.requiredVolumeCuft}"></div>
+    <div class="toolbar">
+      <button class="btn secondary small" id="btn-pond-use-runoff">Use Net Runoff Increase</button>
+      <button class="btn secondary small" id="btn-pond-use-wq">Use WQ Net Required Volume</button>
+    </div>
+    <div class="field-row"><label>Depth (ft)</label><input data-pd="depthFt" value="${s.pondSizing.depthFt}"></div>
+    <div class="field-row"><label>Side slope (H:V)</label><input data-pd="sideSlopeHPerV" value="${s.pondSizing.sideSlopeHPerV}"></div>
+    <div class="field-row"><label>Length : Width ratio</label><input data-pd="lengthToWidthRatio" value="${s.pondSizing.lengthToWidthRatio}"></div>
+    <div class="toolbar">
+      <button class="btn secondary" id="btn-suggest-pond">Suggest Pond Footprint</button>
+    </div>
+    <div id="pond-suggest-results"></div>
+
     <div class="toolbar">
       <button class="btn" id="btn-calc-storage">Calculate</button>
       <button class="btn secondary" id="btn-download-calc-pdf">Download Swale/Exfiltration PDF</button>
@@ -1112,9 +1288,44 @@ function renderStoragePanel() {
     <div id="storage-results"></div>
   `;
 
-  el.querySelectorAll("[data-sa]").forEach(i => i.addEventListener("change", () => { s.siteAreas[i.dataset.sa] = parseFloat(i.value); }));
+  el.querySelectorAll("[data-sa]").forEach(i => i.addEventListener("change", () => {
+    const key = i.dataset.sa;
+    s.siteAreas[key] = parseFloat(i.value);
+    if (s.siteAreas.proposedSameAsExisting) {
+      if (key === "existingSiteSqft") s.siteAreas.proposedSiteSqft = s.siteAreas.existingSiteSqft;
+      if (key === "existingPerviousSqft") s.siteAreas.proposedPerviousSqft = s.siteAreas.existingPerviousSqft;
+    }
+    if (s.waterQuality.projectAreaAutoSync) {
+      const note = document.getElementById("wq-auto-area-display");
+      if (note) note.value = _autoProjectAreaDisplay(s);
+    }
+  }));
+  document.getElementById("sa-same-as-existing").addEventListener("change", (e) => {
+    s.siteAreas.proposedSameAsExisting = e.target.checked;
+    if (e.target.checked) {
+      s.siteAreas.proposedSiteSqft = s.siteAreas.existingSiteSqft;
+      s.siteAreas.proposedPerviousSqft = s.siteAreas.existingPerviousSqft;
+    }
+    renderStoragePanel();
+  });
+
   el.querySelectorAll("[data-ss]").forEach(i => i.addEventListener("change", () => { s.soilStorage[i.dataset.ss] = parseFloat(i.value); }));
-  el.querySelectorAll("[data-wq]").forEach(i => i.addEventListener("change", () => { s.waterQuality[i.dataset.wq] = parseFloat(i.value); }));
+
+  el.querySelectorAll("[data-wq]").forEach(i => i.addEventListener("input", () => {
+    const f = i.dataset.wq;
+    s.waterQuality[f] = parseFloat(i.value);
+    const span = el.querySelector(`[data-cf-for="${f}"]`);
+    if (span) span.textContent = "= " + acInToCf(s.waterQuality[f]) + " CF";
+  }));
+  document.getElementById("wq-area-autosync").addEventListener("change", (e) => {
+    s.waterQuality.projectAreaAutoSync = e.target.checked;
+    if (!e.target.checked) {
+      const v = effectiveProjectAreaAcres(s);
+      if (v !== "") s.waterQuality.projectAreaAcres = v;
+    }
+    renderStoragePanel();
+  });
+
   el.querySelectorAll("[data-ex]").forEach(i => i.addEventListener("change", () => {
     const f = i.dataset.ex;
     s.exfiltration[f] = (f === "h2Method" || f === "requiredVolumeBasis") ? i.value : parseFloat(i.value);
@@ -1138,7 +1349,113 @@ function renderStoragePanel() {
   populateMergeTargetBasinOptions();
   document.getElementById("btn-merge-swale-storage").addEventListener("click", mergeSwaleStorageIntoBasin);
 
+  el.querySelectorAll("[data-tg]").forEach(i => i.addEventListener("change", () => { s.exfiltration[i.dataset.tg] = parseFloat(i.value); }));
+  document.getElementById("btn-suggest-trench").addEventListener("click", suggestTrenchWidths);
+  if (state.trenchSuggestResults) renderTrenchSuggestResults();
+
+  el.querySelectorAll("[data-pd]").forEach(i => i.addEventListener("change", () => { s.pondSizing[i.dataset.pd] = parseFloat(i.value); }));
+  document.getElementById("btn-suggest-pond").addEventListener("click", suggestPondFootprint);
+  document.getElementById("btn-pond-use-runoff").addEventListener("click", () => {
+    if (!state.storageResults || !state.storageResults.runoffVolume) {
+      alert("Click Calculate below first so the net runoff increase is available.");
+      return;
+    }
+    s.pondSizing.requiredVolumeCuft = Math.max(state.storageResults.runoffVolume.netIncreaseCuft, 0);
+    renderStoragePanel();
+  });
+  document.getElementById("btn-pond-use-wq").addEventListener("click", () => {
+    if (!state.storageResults || !state.storageResults.waterQuality) {
+      alert("Click Calculate below first so the WQ net required volume is available.");
+      return;
+    }
+    s.pondSizing.requiredVolumeCuft = acInToCf(state.storageResults.waterQuality.net_required_volume_ac_in);
+    renderStoragePanel();
+  });
+  if (state.pondSuggestResult) renderPondSuggestResult();
+
   renderSwaleList();
+}
+
+async function suggestTrenchWidths() {
+  const resultsEl = document.getElementById("trench-suggest-results");
+  resultsEl.innerHTML = `<p class="muted">Suggesting on the engine server&hellip;</p>`;
+  try {
+    const resp = await fetch("/api/calc/trench-suggest", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(collectStorageWQPayload()),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || "Unknown server error");
+    state.trenchSuggestResults = data;
+    renderTrenchSuggestResults();
+  } catch (err) {
+    resultsEl.innerHTML = `<div class="callout critical"><span class="badge critical">ERROR</span> ${err.message}</div>`;
+  }
+}
+
+function renderTrenchSuggestResults() {
+  const resultsEl = document.getElementById("trench-suggest-results");
+  const data = state.trenchSuggestResults;
+  if (!data || !data.options || data.options.length === 0) {
+    resultsEl.innerHTML = `<p class="muted">No feasible width in the range tried -- widen the min/max width range.</p>`;
+    return;
+  }
+  const rows = data.options.map(o => `<tr class="${o.recommended ? "recommended-row" : ""}">
+    <td class="num">${o.width_ft.toFixed(2)}</td>
+    <td class="num">${o.required_length_ft.toFixed(1)}</td>
+    <td class="num">${o.rock_volume_cy.toFixed(1)}</td>
+    <td>${o.fits_available_length ? "" : `<span class="badge review">OVER LENGTH</span>`}</td>
+    <td>${o.recommended ? `<span class="badge pass">LOWEST ROCK</span>` : ""}</td>
+  </tr>`).join("");
+  resultsEl.innerHTML = `
+    <p class="section-note">Required treatment volume used: <b>${data.requiredVolumeCuft.toFixed(0)} CF</b> (${data.requiredVolumeBasisLabel}).
+      ${data.availableLengthFt != null ? `Available length: <b>${data.availableLengthFt.toFixed(0)} LF</b>.` : ""}</p>
+    <table>
+      <tr><th class="num">Width (ft)</th><th class="num">Required Length (LF)</th><th class="num">Rock Volume (CY)</th><th></th><th></th></tr>
+      ${rows}
+    </table>
+    <p class="section-note">Narrower trenches need more length but less rock; wider trenches need less length but more
+      rock. "LOWEST ROCK" marks the cheapest-fill option among the widths tried (that still fits the available
+      length, if one was given) -- apply it to the Exfiltration Trench fields above and re-Calculate to confirm.</p>
+  `;
+}
+
+async function suggestPondFootprint() {
+  const resultsEl = document.getElementById("pond-suggest-results");
+  resultsEl.innerHTML = `<p class="muted">Suggesting on the engine server&hellip;</p>`;
+  try {
+    const s = state.storageWQ;
+    const resp = await fetch("/api/calc/pond-suggest", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        requiredVolumeCuft: s.pondSizing.requiredVolumeCuft, depthFt: s.pondSizing.depthFt,
+        sideSlopeHPerV: s.pondSizing.sideSlopeHPerV, lengthToWidthRatio: s.pondSizing.lengthToWidthRatio,
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || "Unknown server error");
+    state.pondSuggestResult = data;
+    renderPondSuggestResult();
+  } catch (err) {
+    resultsEl.innerHTML = `<div class="callout critical"><span class="badge critical">ERROR</span> ${err.message}</div>`;
+  }
+}
+
+function renderPondSuggestResult() {
+  const resultsEl = document.getElementById("pond-suggest-results");
+  const r = state.pondSuggestResult;
+  if (!r) { resultsEl.innerHTML = ""; return; }
+  resultsEl.innerHTML = `
+    <table>
+      <tr><th></th><th class="num">Bottom</th><th class="num">Mid-Depth</th><th class="num">Top</th></tr>
+      <tr><td>Length (ft)</td><td class="num">${r.bottom_length_ft.toFixed(1)}</td><td class="num">${r.mid_length_ft.toFixed(1)}</td><td class="num">${r.top_length_ft.toFixed(1)}</td></tr>
+      <tr><td>Width (ft)</td><td class="num">${r.bottom_width_ft.toFixed(1)}</td><td class="num">${r.mid_width_ft.toFixed(1)}</td><td class="num">${r.top_width_ft.toFixed(1)}</td></tr>
+      <tr><td>Footprint (SF)</td><td class="num">${r.bottom_footprint_sqft.toFixed(0)}</td><td class="num">&mdash;</td><td class="num">${r.top_footprint_sqft.toFixed(0)}</td></tr>
+    </table>
+    <p class="section-note">Depth <b>${r.depth_ft.toFixed(2)} ft</b>, side slope <b>${r.side_slope_h_per_v.toFixed(1)}:1 (H:V)</b>,
+      length:width ratio <b>${r.length_to_width_ratio.toFixed(2)}</b> &rarr; provides <b>${r.volume_provided_cuft.toFixed(0)} CF</b>
+      against a required <b>${r.required_volume_cuft.toFixed(0)} CF</b>.</p>
+  `;
 }
 
 function populateMergeTargetBasinOptions() {
@@ -1244,7 +1561,9 @@ function collectStorageWQPayload() {
     siteAreas: state.storageWQ.siteAreas,
     soilStorage: state.storageWQ.soilStorage,
     swales: state.storageWQ.swales,
-    waterQuality: state.storageWQ.waterQuality,
+    waterQuality: Object.assign({}, state.storageWQ.waterQuality, {
+      projectAreaAcres: effectiveProjectAreaAcres(state.storageWQ),
+    }),
     exfiltration: state.storageWQ.exfiltration,
   };
 }
@@ -1291,10 +1610,11 @@ function renderStorageResults(data) {
     const wq = data.waterQuality;
     const badge = wq.status === "PASS" ? `<span class="badge pass">PASS</span>` : `<span class="badge review">${wq.status}</span>`;
     html += `<h2>Water Quality</h2><table>
-      <tr><td>Governing Gross Required Volume</td><td class="num">${wq.governing_gross_required_volume_ac_in.toFixed(3)} ac-in</td></tr>
-      <tr><td>Net Required Volume (after credits)</td><td class="num">${wq.net_required_volume_ac_in.toFixed(3)} ac-in</td></tr>
-      <tr><td>Provided Volume</td><td class="num">${wq.provided_volume_ac_in.toFixed(3)} ac-in</td></tr>
-      <tr><td>Status</td><td>${badge}</td></tr>
+      <tr><th></th><th class="num">ac-in</th><th class="num">CF</th></tr>
+      <tr><td>Governing Gross Required Volume</td><td class="num">${wq.governing_gross_required_volume_ac_in.toFixed(3)}</td><td class="num">${acInToCf(wq.governing_gross_required_volume_ac_in)}</td></tr>
+      <tr><td>Net Required Volume (after credits)</td><td class="num">${wq.net_required_volume_ac_in.toFixed(3)}</td><td class="num">${acInToCf(wq.net_required_volume_ac_in)}</td></tr>
+      <tr><td>Provided Volume</td><td class="num">${wq.provided_volume_ac_in.toFixed(3)}</td><td class="num">${acInToCf(wq.provided_volume_ac_in)}</td></tr>
+      <tr><td>Status</td><td colspan="2">${badge}</td></tr>
     </table>`;
   }
 
@@ -1312,6 +1632,15 @@ function renderStorageResults(data) {
     </table>`;
     if (ex.warnings && ex.warnings.length) {
       html += ex.warnings.map(w => `<div class="callout warning"><span class="badge review">WARNING</span> ${w}</div>`).join("");
+    }
+    if (ex.pipe_diameter_in) {
+      html += `<h2>Rock Volume</h2><table>
+        <tr><td>Pipe Size</td><td class="num">${ex.pipe_diameter_in.toFixed(1)} in</td></tr>
+        <tr><td>Trench (W &times; H &times; L)</td><td class="num">${ex.width_ft.toFixed(2)} &times; ${ex.height_ft.toFixed(2)} &times; ${ex.provided_length_ft.toFixed(1)}</td></tr>
+        <tr><td>Rock Volume (gross &minus; pipe)</td><td class="num">${ex.rock_volume_cuft.toFixed(0)} CF</td></tr>
+        <tr><td><b>Rock Volume</b></td><td class="num"><b>${ex.rock_volume_cy.toFixed(1)} CY</b></td></tr>
+      </table>
+      <p class="section-note">Informational only -- pipe size does not affect the exfiltration sizing above (H2/Du/Ds/K/required length are unaffected).</p>`;
     }
   }
 
@@ -1354,9 +1683,568 @@ async function downloadExcelWorkbook() {
   }
 }
 
+/* =====================================================================
+   COMPARE DESIGNS -- save named snapshots of the current basins +
+   storage/exfiltration setup (e.g. "2 wells", "1 well + larger trench"),
+   run each through the same engine endpoints already used elsewhere,
+   and show the results side by side. Every design is an independent
+   deep copy: editing the live workspace after saving a design never
+   changes it, and loading a design into the workspace is a one-way
+   copy the other direction, not a live link.
+   ===================================================================== */
+
+function deepClone(obj) {
+  return JSON.parse(JSON.stringify(obj));
+}
+
+// 1 acre-inch = 3,630 CF (43,560 SF/ac * 1 in / 12 in/ft) -- the same
+// conversion api/adapter.py uses server-side for the water-quality
+// required-volume figure, kept in sync here for the CF readouts next
+// to the ac-in credit fields.
+function acInToCf(acIn) {
+  const v = parseFloat(acIn);
+  return isFinite(v) ? (v * 3630).toFixed(0) : "--";
+}
+
+// The Water Quality "Project area (acres)" field used to be a second,
+// independently-typed copy of the Proposed Site Area entered on the
+// same tab (Site Areas, in SF) -- flagged as a duplicate-entry error
+// source. When auto-sync is on (the default), this derives it instead.
+function effectiveProjectAreaAcres(sw) {
+  if (sw.waterQuality.projectAreaAutoSync) {
+    const sf = parseFloat(sw.siteAreas.proposedSiteSqft);
+    return (isFinite(sf) && sf > 0) ? sf / 43560 : "";
+  }
+  return sw.waterQuality.projectAreaAcres;
+}
+
+function _autoProjectAreaDisplay(sw) {
+  const v = effectiveProjectAreaAcres(sw);
+  return v === "" ? "" : v.toFixed(5);
+}
+
+// Merges a (possibly older-shape) storageWQ object onto the current
+// default shape, so a project file or saved design captured before a
+// newer field existed (pondSizing, the trench suggestion inputs, the
+// site-area/project-area sync flags) still loads with sane defaults
+// instead of leaving those fields undefined.
+function mergeStorageWQDefaults(d) {
+  d = d || {};
+  return {
+    siteAreas: Object.assign({}, state.storageWQ.siteAreas, d.siteAreas || {}),
+    soilStorage: Object.assign({}, state.storageWQ.soilStorage, d.soilStorage || {}),
+    swales: d.swales || [],
+    waterQuality: Object.assign({}, state.storageWQ.waterQuality, d.waterQuality || {}),
+    exfiltration: Object.assign({}, state.storageWQ.exfiltration, d.exfiltration || {}),
+    pondSizing: Object.assign({}, state.storageWQ.pondSizing, d.pondSizing || {}),
+  };
+}
+
+function renderComparePanel() {
+  const el = document.getElementById("panel-compare");
+  const designs = state.savedDesigns;
+
+  const designRows = designs.length === 0
+    ? `<p class="muted">No saved designs yet. Set up a basin/trench configuration on the other tabs, then save it here as a named design.</p>`
+    : `<table>
+        <tr><th>Design</th><th>Saved</th><th></th></tr>
+        ${designs.map((d, i) => `<tr>
+          <td><input data-design-rename="${i}" value="${d.name}"></td>
+          <td class="muted">${new Date(d.savedAt).toLocaleString()}</td>
+          <td>
+            <button class="btn secondary" data-design-load="${i}">Load into Workspace</button>
+            <button class="btn secondary" data-design-delete="${i}">Delete</button>
+          </td>
+        </tr>`).join("")}
+      </table>`;
+
+  el.innerHTML = `
+    <h1>Compare Designs</h1>
+    <p class="subtitle">Save the current basin and storage/exfiltration setup as a named design, then run all saved
+      designs together to compare hydraulic performance and rock/fill volume side by side.</p>
+
+    <h2>Save Current Setup</h2>
+    <div class="field-row"><label>Design name</label><input id="new-design-name" placeholder="e.g. 2 wells, 6in pipe"></div>
+    <div class="toolbar">
+      <button class="btn" id="btn-save-design">Save Current as Design</button>
+    </div>
+
+    <h2>Saved Designs</h2>
+    ${designRows}
+
+    <div class="toolbar">
+      <button class="btn" id="btn-run-compare" ${designs.length === 0 ? "disabled" : ""}>Run &amp; Compare All (${designs.length})</button>
+    </div>
+
+    <div id="compare-results"></div>
+  `;
+
+  document.getElementById("btn-save-design").addEventListener("click", saveCurrentAsDesign);
+  el.querySelectorAll("[data-design-rename]").forEach(i => i.addEventListener("change", () => {
+    state.savedDesigns[+i.dataset.designRename].name = i.value;
+  }));
+  el.querySelectorAll("[data-design-load]").forEach(b => b.addEventListener("click", () => loadDesignIntoWorkspace(+b.dataset.designLoad)));
+  el.querySelectorAll("[data-design-delete]").forEach(b => b.addEventListener("click", () => deleteDesign(+b.dataset.designDelete)));
+  document.getElementById("btn-run-compare").addEventListener("click", runCompare);
+
+  if (state.compareResults) renderCompareResults();
+}
+
+function saveCurrentAsDesign() {
+  const nameInput = document.getElementById("new-design-name");
+  const name = nameInput.value.trim() || `Design ${state.savedDesigns.length + 1}`;
+  state.savedDesigns.push({
+    name,
+    savedAt: new Date().toISOString(),
+    basins: deepClone(state.basins),
+    storageWQ: deepClone(state.storageWQ),
+  });
+  state.compareResults = null;
+  renderComparePanel();
+}
+
+function loadDesignIntoWorkspace(index) {
+  const d = state.savedDesigns[index];
+  if (!d) return;
+  if (!confirm(`Load "${d.name}" into the workspace? This replaces the basins and storage/exfiltration setup on the other tabs (the design itself stays saved).`)) return;
+  state.basins = deepClone(d.basins);
+  state.storageWQ = mergeStorageWQDefaults(deepClone(d.storageWQ));
+  state.trenchSuggestResults = null;
+  state.pondSuggestResult = null;
+  renderBasinPanel("existing", "Existing Conditions");
+  renderBasinPanel("proposed", "Proposed Conditions");
+  renderStoragePanel();
+  state.results = null;
+  document.getElementById("run-log").innerHTML = "";
+  document.getElementById("results-content").innerHTML = `<p class="muted">Run the model first.</p>`;
+}
+
+function deleteDesign(index) {
+  const d = state.savedDesigns[index];
+  if (!d) return;
+  if (!confirm(`Delete saved design "${d.name}"? This cannot be undone.`)) return;
+  state.savedDesigns.splice(index, 1);
+  state.compareResults = null;
+  renderComparePanel();
+}
+
+function buildRunPayloadForDesign(design) {
+  const base = collectProjectPayload();
+  return { ...base, basins: design.basins };
+}
+
+function buildStoragePayloadForDesign(design) {
+  return {
+    projectName: document.getElementById("p-name").value,
+    projectAddress: document.getElementById("p-address").value,
+    siteAreas: design.storageWQ.siteAreas,
+    soilStorage: design.storageWQ.soilStorage,
+    swales: design.storageWQ.swales,
+    waterQuality: Object.assign({}, design.storageWQ.waterQuality, {
+      projectAreaAcres: effectiveProjectAreaAcres(design.storageWQ),
+    }),
+    exfiltration: design.storageWQ.exfiltration,
+  };
+}
+
+async function runCompare() {
+  const resultsEl = document.getElementById("compare-results");
+  resultsEl.innerHTML = `<p class="muted">Running ${state.savedDesigns.length} design(s) on the engine server&hellip;</p>`;
+  try {
+    const runs = await Promise.all(state.savedDesigns.map(async (design) => {
+      const [runResp, storageResp] = await Promise.all([
+        fetch("/api/run", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(buildRunPayloadForDesign(design)) }),
+        fetch("/api/calc/storage", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(buildStoragePayloadForDesign(design)) }),
+      ]);
+      const runData = await runResp.json();
+      const storageData = await storageResp.json();
+      if (!runResp.ok) throw new Error(`${design.name}: ${runData.error || "run failed"}`);
+      if (!storageResp.ok) throw new Error(`${design.name}: ${storageData.error || "storage calc failed"}`);
+      return { name: design.name, run: runData, storage: storageData };
+    }));
+    state.compareResults = runs;
+    renderCompareResults();
+  } catch (err) {
+    resultsEl.innerHTML = `<div class="callout critical"><span class="badge critical">ERROR</span> ${err.message}</div>`;
+  }
+}
+
+function renderCompareResults() {
+  const resultsEl = document.getElementById("compare-results");
+  const runs = state.compareResults;
+  if (!runs || runs.length === 0) { resultsEl.innerHTML = ""; return; }
+
+  // Collect every (event, basin) pair seen across any design's PROPOSED
+  // scenarios, so a basin id renamed/added in one design still gets its
+  // own row rather than silently merging with another.
+  const eventBasinKeys = [];
+  const seen = new Set();
+  for (const r of runs) {
+    for (const s of r.run.scenarios) {
+      if (s.condition !== "proposed") continue;
+      for (const b of s.basins) {
+        const key = `${s.event}|${s.eventLabel}|${b.basinId}`;
+        if (!seen.has(key)) { seen.add(key); eventBasinKeys.push({ event: s.event, eventLabel: s.eventLabel, basinId: b.basinId }); }
+      }
+    }
+  }
+
+  const findRow = (r, event, basinId) => {
+    const scenario = r.run.scenarios.find(s => s.condition === "proposed" && s.event === event);
+    if (!scenario) return null;
+    return scenario.basins.find(b => b.basinId === basinId) || null;
+  };
+  const findScenario = (r, event) => r.run.scenarios.find(s => s.condition === "proposed" && s.event === event);
+
+  const stageRows = eventBasinKeys.map(k => `<tr>
+    <td>${k.eventLabel} &mdash; ${k.basinId}</td>
+    ${runs.map(r => { const b = findRow(r, k.event, k.basinId); return `<td class="num">${b ? b.peakStageFt.toFixed(3) : "&mdash;"}</td>`; }).join("")}
+  </tr>`).join("");
+
+  const offsiteRows = eventBasinKeys.map(k => `<tr>
+    <td>${k.eventLabel} &mdash; ${k.basinId}</td>
+    ${runs.map(r => { const b = findRow(r, k.event, k.basinId); return `<td class="num">${b ? b.massBalance.offsiteAF.toFixed(4) : "&mdash;"}</td>`; }).join("")}
+  </tr>`).join("");
+
+  // Only worth a row if at least one design has a berm elevation set
+  // anywhere -- otherwise every cell would be a dash.
+  const hasAnyBerm = eventBasinKeys.some(k => runs.some(r => { const b = findRow(r, k.event, k.basinId); return b && b.freeboardFt != null; }));
+  const freeboardRows = !hasAnyBerm ? "" : eventBasinKeys.map(k => `<tr>
+    <td>${k.eventLabel} &mdash; ${k.basinId}</td>
+    ${runs.map(r => { const b = findRow(r, k.event, k.basinId);
+      if (!b || b.freeboardFt == null) return `<td class="num">&mdash;</td>`;
+      return `<td class="num">${b.freeboardFt.toFixed(3)}${b.freeboardFt < 0 ? " (overtopped)" : ""}</td>`;
+    }).join("")}
+  </tr>`).join("");
+
+  // De-duplicated list of events for the network-total offsite row.
+  const events = [];
+  const seenEvt = new Set();
+  for (const k of eventBasinKeys) { if (!seenEvt.has(k.event)) { seenEvt.add(k.event); events.push(k); } }
+  const networkOffsiteRows = events.map(k => `<tr>
+    <td>${k.eventLabel} (network total)</td>
+    ${runs.map(r => { const s = findScenario(r, k.event); return `<td class="num">${s ? s.networkTotalOffsiteAF.toFixed(4) : "&mdash;"}</td>`; }).join("")}
+  </tr>`).join("");
+
+  const rockRow = `<tr>
+    <td>Rock Volume (CY)</td>
+    ${runs.map(r => { const ex = r.storage.exfiltration; return `<td class="num">${ex && ex.pipe_diameter_in ? ex.rock_volume_cy.toFixed(1) : "&mdash;"}</td>`; }).join("")}
+  </tr>`;
+  const trenchLenRow = `<tr>
+    <td>Exfiltration Trench: Required / Provided Length (LF)</td>
+    ${runs.map(r => { const ex = r.storage.exfiltration; return `<td class="num">${ex ? `${ex.required_length_ft.toFixed(0)} / ${ex.provided_length_ft.toFixed(0)}` : "&mdash;"}</td>`; }).join("")}
+  </tr>`;
+  const trenchStatusRow = `<tr>
+    <td>Exfiltration Status</td>
+    ${runs.map(r => { const ex = r.storage.exfiltration;
+      if (!ex) return `<td>&mdash;</td>`;
+      return `<td>${ex.status === "PASS" ? `<span class="badge pass">PASS</span>` : `<span class="badge critical">${ex.status}</span>`}</td>`;
+    }).join("")}
+  </tr>`;
+  const findingsRow = `<tr>
+    <td>QA Findings (critical / warning)</td>
+    ${runs.map(r => {
+      const crit = r.run.findings.filter(f => f.level === "CRITICAL").length;
+      const warn = r.run.findings.filter(f => f.level !== "CRITICAL").length;
+      return `<td class="num">${crit} / ${warn}</td>`;
+    }).join("")}
+  </tr>`;
+
+  resultsEl.innerHTML = `
+    <h2>Comparison</h2>
+    <table>
+      <tr><th></th>${runs.map(r => `<th>${r.name}</th>`).join("")}</tr>
+      <tr><td colspan="${runs.length + 1}"><b>Peak Stage, Proposed (ft)</b></td></tr>
+      ${stageRows}
+      ${hasAnyBerm ? `<tr><td colspan="${runs.length + 1}"><b>Freeboard, Proposed (ft)</b></td></tr>${freeboardRows}` : ""}
+      <tr><td colspan="${runs.length + 1}"><b>Basin Offsite Discharge (ac-ft)</b></td></tr>
+      ${offsiteRows}
+      <tr><td colspan="${runs.length + 1}"><b>Network Offsite Discharge</b></td></tr>
+      ${networkOffsiteRows}
+      <tr><td colspan="${runs.length + 1}"><b>Rock / Fill &amp; Exfiltration</b></td></tr>
+      ${rockRow}
+      ${trenchLenRow}
+      ${trenchStatusRow}
+      <tr><td colspan="${runs.length + 1}"><b>QA</b></td></tr>
+      ${findingsRow}
+    </table>
+    <p class="section-note">Rock Volume only appears for designs with a pipe size entered on the Exfiltration Trench section (Storage &amp; Water Quality tab) -- it's informational, not part of the hydraulic sizing.</p>
+  `;
+}
+
+/* =====================================================================
+   HYDROGRAPH -- inflow/discharge and stage vs. time, per scenario/basin
+   (future-improvement #7). Reads straight from state.results, the same
+   /api/run payload the Results tab uses -- api/adapter.py now attaches
+   a full timeSeries block per basin (time_hours/stage_ft/inflow/offsite/
+   onsite, already computed by hydraulics/network.py's routing loop, just
+   not previously exposed), so this needs no extra server call once
+   Run Model has produced results. Pure client-side SVG, no charting
+   library, to match this app's self-contained/offline-friendly design.
+   ===================================================================== */
+
+// A handful of "nice" step sizes (1/2/5 x 10^n) for y-axis ticks --
+// keeps tick labels at clean numbers (0 / 2 / 4, not 0 / 1.83 / 3.66)
+// per the dataviz skill's labeling guidance.
+function _niceStep(roughStep) {
+  if (roughStep <= 0) return 1;
+  const mag = Math.pow(10, Math.floor(Math.log10(roughStep)));
+  const norm = roughStep / mag;
+  const step = norm < 1.5 ? 1 : norm < 3.5 ? 2 : norm < 7.5 ? 5 : 10;
+  return step * mag;
+}
+
+function _niceTicks(min, max, targetCount) {
+  if (min === max) { min -= 1; max += 1; }
+  const step = _niceStep((max - min) / targetCount);
+  const niceMin = Math.floor(min / step) * step;
+  const niceMax = Math.ceil(max / step) * step;
+  const ticks = [];
+  for (let v = niceMin; v <= niceMax + step * 1e-9; v += step) ticks.push(Math.round(v / step) * step);
+  return { ticks, min: niceMin, max: niceMax };
+}
+
+function _fmtNum(v) {
+  if (Math.abs(v) >= 1000) return (v / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+  if (Number.isInteger(v)) return String(v);
+  return v.toFixed(Math.abs(v) < 10 ? 2 : 1);
+}
+
+// Draws one time-series line chart (title, y-axis label, 1-3 series,
+// legend when >1 series, gridlines, and a hover crosshair+tooltip that
+// reads every series at the nearest time) into `container` (a DOM
+// element, already sized/visible). `series` is
+// [{name, color, values}], all sharing `xValues` (hours). `yDomain`
+// optionally forces {min, max} (e.g. flow forced to start at 0);
+// omitted, it's computed from the data with headroom. `peak` optionally
+// draws a labeled marker at {index, label}.
+function drawTimeSeriesChart(container, { title, yLabel, xValues, series, yDomain, peak }) {
+  const width = Math.max(container.clientWidth || 640, 320);
+  const height = 260;
+  const margin = { top: 28, right: 18, bottom: 32, left: 56 };
+  const innerW = width - margin.left - margin.right;
+  const innerH = height - margin.top - margin.bottom;
+
+  const xMin = xValues[0], xMax = xValues[xValues.length - 1];
+  let yMin, yMax;
+  if (yDomain) {
+    yMin = yDomain.min; yMax = yDomain.max;
+  } else {
+    let lo = Infinity, hi = -Infinity;
+    for (const s of series) for (const v of s.values) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    if (lo === Infinity) { lo = 0; hi = 1; }
+    const pad = (hi - lo) * 0.08 || 1;
+    yMin = lo - pad; yMax = hi + pad;
+  }
+  const yTicks = _niceTicks(yMin, yMax, 5);
+  yMin = Math.min(yMin, yTicks.min); yMax = Math.max(yMax, yTicks.max);
+
+  const xScale = (t) => margin.left + (xMax > xMin ? (t - xMin) / (xMax - xMin) : 0) * innerW;
+  const yScale = (v) => margin.top + innerH - (yMax > yMin ? (v - yMin) / (yMax - yMin) : 0) * innerH;
+
+  const xTicks = _niceTicks(xMin, xMax, 6).ticks.filter(t => t >= xMin - 1e-9 && t <= xMax + 1e-9);
+
+  const gridlines = yTicks.ticks.map(v => `<line x1="${margin.left}" x2="${width - margin.right}" y1="${yScale(v)}" y2="${yScale(v)}" stroke="var(--hg-grid)" stroke-width="1"/>`).join("");
+  const yTickLabels = yTicks.ticks.map(v => `<text x="${margin.left - 8}" y="${yScale(v)}" text-anchor="end" dominant-baseline="middle" class="hg-axis-label">${_fmtNum(v)}</text>`).join("");
+  const xTickLabels = xTicks.map(t => `<text x="${xScale(t)}" y="${height - margin.bottom + 18}" text-anchor="middle" class="hg-axis-label">${_fmtNum(t)}</text>`).join("");
+  const xTickMarks = xTicks.map(t => `<line x1="${xScale(t)}" x2="${xScale(t)}" y1="${height - margin.bottom}" y2="${height - margin.bottom + 4}" stroke="var(--hg-axis)" stroke-width="1"/>`).join("");
+
+  const paths = series.map(s => {
+    const d = xValues.map((t, i) => `${i === 0 ? "M" : "L"}${xScale(t).toFixed(2)},${yScale(s.values[i]).toFixed(2)}`).join(" ");
+    return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  }).join("");
+
+  let peakMarkup = "";
+  if (peak && peak.index != null) {
+    const px = xScale(xValues[peak.index]), py = yScale(peak.value);
+    peakMarkup = `
+      <line x1="${px}" x2="${px}" y1="${margin.top}" y2="${height - margin.bottom}" stroke="var(--hg-axis)" stroke-width="1" stroke-dasharray="3,3"/>
+      <circle cx="${px}" cy="${py}" r="4.5" fill="${peak.color}" stroke="var(--hg-surface)" stroke-width="2"/>
+      <text x="${px}" y="${margin.top - 10}" text-anchor="${px > width - 120 ? "end" : px < 80 ? "start" : "middle"}" class="hg-peak-label">${peak.label}</text>
+    `;
+  }
+
+  const legend = series.length > 1 ? `
+    <div class="hg-legend">
+      ${series.map(s => `<span class="hg-legend-item"><span class="hg-legend-swatch" style="background:${s.color}"></span>${s.name}</span>`).join("")}
+    </div>` : "";
+
+  const uid = "hg" + Math.random().toString(36).slice(2, 9);
+  container.innerHTML = `
+    <div class="hg-chart-head"><span class="hg-chart-title">${title}</span>${legend}</div>
+    <div class="hg-chart-wrap" style="position:relative;">
+      <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMinYMin meet" class="hg-svg" id="${uid}">
+        ${gridlines}
+        <line x1="${margin.left}" x2="${width - margin.right}" y1="${height - margin.bottom}" y2="${height - margin.bottom}" stroke="var(--hg-axis)" stroke-width="1"/>
+        ${xTickMarks}
+        ${yTickLabels}
+        ${xTickLabels}
+        <text x="${margin.left}" y="14" class="hg-axis-title">${yLabel}</text>
+        <text x="${width - margin.right}" y="${height - 2}" text-anchor="end" class="hg-axis-title">Time (hr)</text>
+        ${paths}
+        ${peakMarkup}
+        <g id="${uid}-hover" visibility="hidden">
+          <line id="${uid}-crosshair" x1="0" x2="0" y1="${margin.top}" y2="${height - margin.bottom}" stroke="var(--hg-axis)" stroke-width="1"/>
+        </g>
+        <rect id="${uid}-hitrect" x="${margin.left}" y="${margin.top}" width="${Math.max(innerW,1)}" height="${Math.max(innerH,1)}" fill="transparent"/>
+      </svg>
+      <div class="hg-tooltip" id="${uid}-tooltip" style="display:none;"></div>
+    </div>
+  `;
+
+  const svg = document.getElementById(uid);
+  const hoverG = document.getElementById(`${uid}-hover`);
+  const crosshair = document.getElementById(`${uid}-crosshair`);
+  const tooltip = document.getElementById(`${uid}-tooltip`);
+  const hitrect = document.getElementById(`${uid}-hitrect`);
+
+  const dots = series.map(s => {
+    const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    dot.setAttribute("r", "4"); dot.setAttribute("fill", s.color);
+    dot.setAttribute("stroke", "var(--hg-surface)"); dot.setAttribute("stroke-width", "2");
+    hoverG.appendChild(dot);
+    return dot;
+  });
+
+  function onMove(evt) {
+    const rect = svg.getBoundingClientRect();
+    // rect is the SVG's rendered (CSS) box, which can be narrower than
+    // its internal `width` coordinate system if the viewBox ever scales
+    // it down (e.g. the container shrinks after a scrollbar appears) --
+    // convert the pointer's rendered-pixel position back into internal
+    // SVG coordinates so the crosshair still lands under the cursor.
+    const scaleX = width / rect.width;
+    const mx = (evt.clientX - rect.left) * scaleX;
+    const frac = Math.min(Math.max((mx - margin.left) / innerW, 0), 1);
+    const tAtMouse = xMin + frac * (xMax - xMin);
+    // nearest data index -- readers aim at a time, not a 2px line.
+    let lo = 0, hi = xValues.length - 1;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; (xValues[mid] < tAtMouse ? lo = mid : hi = mid); }
+    const idx = (tAtMouse - xValues[lo]) <= (xValues[hi] - tAtMouse) ? lo : hi;
+
+    const cx = xScale(xValues[idx]);
+    crosshair.setAttribute("x1", cx); crosshair.setAttribute("x2", cx);
+    series.forEach((s, i) => { dots[i].setAttribute("cx", cx); dots[i].setAttribute("cy", yScale(s.values[idx])); });
+    hoverG.setAttribute("visibility", "visible");
+
+    tooltip.style.display = "block";
+    tooltip.innerHTML = "";
+    const timeRow = document.createElement("div");
+    timeRow.className = "hg-tooltip-time";
+    timeRow.textContent = `t = ${xValues[idx].toFixed(2)} hr`;
+    tooltip.appendChild(timeRow);
+    series.forEach(s => {
+      const row = document.createElement("div");
+      row.className = "hg-tooltip-row";
+      const key = document.createElement("span");
+      key.className = "hg-tooltip-key";
+      key.style.background = s.color;
+      const val = document.createElement("span");
+      val.className = "hg-tooltip-val";
+      val.textContent = _fmtNum(s.values[idx]);
+      const name = document.createElement("span");
+      name.className = "hg-tooltip-name";
+      name.textContent = s.name;
+      row.appendChild(key); row.appendChild(val); row.appendChild(name);
+      tooltip.appendChild(row);
+    });
+
+    const tw = 170;
+    let left = cx + 12;
+    if (left + tw > width) left = cx - tw - 12;
+    tooltip.style.left = left + "px";
+    tooltip.style.top = "8px";
+  }
+  function onLeave() { hoverG.setAttribute("visibility", "hidden"); tooltip.style.display = "none"; }
+
+  hitrect.addEventListener("mousemove", onMove);
+  hitrect.addEventListener("mouseleave", onLeave);
+}
+
+function renderHydrographPanel() {
+  const el = document.getElementById("panel-hydrograph");
+  if (!state.results || state.results.length === 0) {
+    el.innerHTML = `<h1>Hydrograph</h1><p class="muted">Run the model first (Run Model tab) -- the hydrograph reads directly from the last run's results.</p>`;
+    return;
+  }
+
+  const scenarios = state.results;
+  let sel = state.hydrographSelection;
+  if (!sel.scenarioId || !scenarios.some(s => s.scenarioId === sel.scenarioId)) {
+    sel.scenarioId = scenarios[0].scenarioId;
+    sel.basinId = scenarios[0].basins[0].basinId;
+  }
+  const scenario = scenarios.find(s => s.scenarioId === sel.scenarioId);
+  if (!scenario.basins.some(b => b.basinId === sel.basinId)) {
+    sel.basinId = scenario.basins[0].basinId;
+  }
+  const basin = scenario.basins.find(b => b.basinId === sel.basinId);
+
+  el.innerHTML = `
+    <h1>Hydrograph</h1>
+    <p class="subtitle">Inflow, discharge, and stage over time for one scenario/basin at a time -- reads directly from the last Run Model results (no re-run needed to switch).</p>
+    <div class="field-row"><label>Scenario</label>
+      <select id="hg-scenario">
+        ${scenarios.map(s => `<option value="${s.scenarioId}" ${s.scenarioId===sel.scenarioId?"selected":""}>${s.scenarioId} &mdash; ${s.condition} / ${s.eventLabel}</option>`).join("")}
+      </select>
+    </div>
+    <div class="field-row"><label>Basin</label>
+      <select id="hg-basin">
+        ${scenario.basins.map(b => `<option value="${b.basinId}" ${b.basinId===sel.basinId?"selected":""}>${b.basinId}</option>`).join("")}
+      </select>
+    </div>
+    <div id="hg-flow-chart" class="hg-chart-card"></div>
+    <div id="hg-stage-chart" class="hg-chart-card"></div>
+    <p class="section-note">Inflow is the basin's own runoff hydrograph (SBUH); Offsite Discharge and Onsite Disposal are the structures actually
+      moving water out of the basin. Hover either chart for exact values at a given time. Stage's dashed marker is the peak (also shown on the
+      Results tab); freeboard, if a berm elevation is set for this basin, is berm elevation minus that peak.</p>
+  `;
+
+  document.getElementById("hg-scenario").addEventListener("change", (e) => {
+    state.hydrographSelection.scenarioId = e.target.value;
+    const newScenario = scenarios.find(s => s.scenarioId === e.target.value);
+    if (!newScenario.basins.some(b => b.basinId === state.hydrographSelection.basinId)) {
+      state.hydrographSelection.basinId = newScenario.basins[0].basinId;
+    }
+    renderHydrographPanel();
+  });
+  document.getElementById("hg-basin").addEventListener("change", (e) => {
+    state.hydrographSelection.basinId = e.target.value;
+    renderHydrographPanel();
+  });
+
+  const ts = basin.timeSeries;
+  const hasInterbasin = ts.interbasinInflowCfs.some(v => v !== 0) || ts.interbasinOutflowCfs.some(v => v !== 0);
+  const flowSeries = [
+    { name: "Inflow (basin runoff)", color: "var(--hg-series-1)", values: ts.inflowCfs },
+    { name: "Offsite Discharge", color: "var(--hg-series-2)", values: ts.offsiteCfs },
+    { name: "Onsite Disposal", color: "var(--hg-series-3)", values: ts.onsiteCfs },
+  ];
+  if (hasInterbasin) {
+    flowSeries.push({ name: "Interbasin Net", color: "var(--hg-series-4)",
+      values: ts.tHours.map((_, i) => ts.interbasinInflowCfs[i] - ts.interbasinOutflowCfs[i]) });
+  }
+  drawTimeSeriesChart(document.getElementById("hg-flow-chart"), {
+    title: `Flow Hydrograph -- ${scenario.eventLabel}, ${scenario.condition}, basin ${basin.basinId}`,
+    yLabel: "Flow (cfs)", xValues: ts.tHours, series: flowSeries, yDomain: { min: 0, max: Math.max(0.001, ...flowSeries.flatMap(s => s.values)) * 1.08 },
+  });
+
+  const peakIdx = ts.stageFt.reduce((best, v, i) => v > ts.stageFt[best] ? i : best, 0);
+  drawTimeSeriesChart(document.getElementById("hg-stage-chart"), {
+    title: `Stage -- ${scenario.eventLabel}, ${scenario.condition}, basin ${basin.basinId}`,
+    yLabel: "Stage (ft NAVD)", xValues: ts.tHours, series: [{ name: "Stage", color: "var(--hg-series-1)", values: ts.stageFt }],
+    peak: { index: peakIdx, value: ts.stageFt[peakIdx], color: "var(--hg-series-1)",
+      label: `Peak ${ts.stageFt[peakIdx].toFixed(2)} ft @ ${ts.tHours[peakIdx].toFixed(1)} hr` },
+  });
+}
+
 renderBasinPanel("existing", "Existing Conditions");
 renderBasinPanel("proposed", "Proposed Conditions");
 renderStoragePanel();
+renderComparePanel();
+renderHydrographPanel();
 </script>
 </body>
 </html>
