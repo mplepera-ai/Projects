@@ -18,6 +18,7 @@ Reverse conversions to acre-in / acre-ft are provided at the edges.
 """
 
 from __future__ import annotations
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional
@@ -49,6 +50,14 @@ class ExfiltrationTrench:
     trench_width_ft: float
     actual_trench_length_ft: float
     hydraulic_conductivity_k: float  # cfs/ft^2-ft head
+
+    # Optional: the pipe (perforated/slotted underdrain) run through the
+    # trench, for the ROCK VOLUME quantity below. This is purely a
+    # construction/materials quantity -- it plays no part in the
+    # exfiltration hydraulics above (H2/Du/Ds/K/W/required length are all
+    # unaffected by pipe size) and is never used in required_length_ft or
+    # provided_capacity_cuft.
+    pipe_diameter_in: Optional[float] = None
 
     factor_of_safety: float = 2.0
     h2_method: H2Method = H2Method.SFWMD_STANDARD
@@ -139,6 +148,41 @@ class ExfiltrationTrench:
         """Effective head across the trench cross-section. Defaults to
         H2 if not explicitly given (see field docstring)."""
         return self.effective_head_ft if self.effective_head_ft is not None else self.H2
+
+    # ---- Rock volume (construction quantity, not a hydraulic term) --------
+    # Requested to help evaluate designs that achieve the required
+    # exfiltration capacity while minimizing rock (#57 stone) fill volume,
+    # since that's a material cost driver independent of what the
+    # hydraulic sizing above requires.
+
+    @property
+    def pipe_area_sqft(self) -> float:
+        """Cross-sectional area of the pipe run through the trench, or
+        0.0 if no pipe diameter was given (e.g. a rock-only trench with
+        no underdrain)."""
+        if not self.pipe_diameter_in:
+            return 0.0
+        radius_ft = (self.pipe_diameter_in / 12.0) / 2.0
+        return math.pi * radius_ft ** 2
+
+    @property
+    def rock_volume_cuft(self) -> float:
+        """Gross trench volume (W x H x provided length) minus the pipe's
+        own volume -- the volume of rock backfill actually needed to
+        construct the trench around the pipe. This is a raw material
+        quantity (no stone porosity applied): if you need the USABLE void
+        storage the rock+pipe provide instead, see
+        ExfiltrationStaticStorage.trench_void_storage_cuft, which applies
+        porosity to this same gross-minus-pipe volume."""
+        gross_volume = self.trench_width_ft * self.trench_height_ft * self.actual_trench_length_ft
+        pipe_volume = self.pipe_area_sqft * self.actual_trench_length_ft
+        return max(gross_volume - pipe_volume, 0.0)
+
+    @property
+    def rock_volume_cy(self) -> float:
+        """rock_volume_cuft in cubic yards (1 CY = 27 CF) -- the unit
+        rock/stone is typically ordered and paid for in."""
+        return self.rock_volume_cuft / 27.0
 
     # ---- Validity checks (Section 22) -------------------------------------
 
@@ -247,6 +291,65 @@ class ExfiltrationTrench:
         volume_cuft = rate_cfs * design_period_hours * 3600.0
         return volume_cuft / self.percent_wq_required if self.percent_wq_required else volume_cuft
 
+    # ---- Width/length auto-suggestion (future-improvement #4) -------------
+    # Requested alongside rock volume: given a fixed set of "everything
+    # else" (elevations, water table, K, FS, ...), try a range of trench
+    # widths and report the required length and rock volume at each --
+    # so a width/length combination can be picked that meets the
+    # required treatment volume with the least rock (#57 stone) fill,
+    # which is a real cost driver independent of the hydraulic sizing.
+
+    def suggest_trench_widths(
+        self,
+        required_treatment_volume_cuft: float,
+        width_options_ft: Optional[List[float]] = None,
+        available_length_ft: Optional[float] = None,
+        design_period_hours: float = 1.0,
+    ) -> List[dict]:
+        """
+        Does not mutate this trench. Returns one row per width tried:
+        {width_ft, required_length_ft, rock_volume_cuft, rock_volume_cy,
+        fits_available_length, recommended}. "recommended" marks the
+        lowest-rock-volume option that still fits available_length_ft
+        (or, if none fit, the lowest-rock-volume option overall, so the
+        result is never silently empty just because nothing fit).
+        """
+        if width_options_ft is None:
+            width_options_ft = [w / 2.0 for w in range(4, 25)]  # 2.0 .. 12.0 ft by 0.5 ft
+
+        from dataclasses import replace
+
+        rows: List[dict] = []
+        for w in width_options_ft:
+            if w is None or w <= 0:
+                continue
+            trial = replace(self, trench_width_ft=float(w))
+            try:
+                required_length = trial.required_length_ft(
+                    required_treatment_volume_cuft, design_period_hours,
+                )
+            except ExfiltrationError:
+                # This width makes the denominator non-positive (e.g. no
+                # available head) -- skip it rather than fail the whole
+                # suggestion run.
+                continue
+            rock_trial = replace(trial, actual_trench_length_ft=required_length)
+            fits = available_length_ft is None or required_length <= available_length_ft
+            rows.append({
+                "width_ft": float(w),
+                "required_length_ft": required_length,
+                "rock_volume_cuft": rock_trial.rock_volume_cuft,
+                "rock_volume_cy": rock_trial.rock_volume_cy,
+                "fits_available_length": fits,
+            })
+
+        feasible = [r for r in rows if r["fits_available_length"]]
+        pool = feasible if feasible else rows
+        best = min(pool, key=lambda r: r["rock_volume_cy"]) if pool else None
+        for r in rows:
+            r["recommended"] = best is not None and r is best
+        return rows
+
     def report(self, required_treatment_volume_cuft: float, design_period_hours: float = 1.0) -> dict:
         used_conservative = self.requires_conservative_equation()
         required_length = self.required_length_ft(required_treatment_volume_cuft, design_period_hours)
@@ -265,6 +368,7 @@ class ExfiltrationTrench:
             "Du_ft": self.Du,
             "Ds_ft": self.Ds,
             "width_ft": self.trench_width_ft,
+            "height_ft": self.trench_height_ft,
             "equation_used": "L2 (conservative)" if used_conservative else "L1 (standard)",
             "required_length_ft": required_length,
             "provided_length_ft": self.actual_trench_length_ft,
@@ -272,6 +376,9 @@ class ExfiltrationTrench:
             "provided_capacity_ac_ft": provided_capacity * CUFT_TO_ACRE_FT,
             "status": status,
             "warnings": self.validity_warnings(),
+            "pipe_diameter_in": self.pipe_diameter_in,
+            "rock_volume_cuft": self.rock_volume_cuft,
+            "rock_volume_cy": self.rock_volume_cy,
         }
 
 
