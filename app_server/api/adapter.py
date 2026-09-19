@@ -106,6 +106,7 @@ def _basin_from_dict(d: Dict[str, Any], basin_id: str) -> Basin:
         area_acres=float(d["areaAcres"]), ground_storage_inches=float(d["groundStorageIn"]),
         time_of_concentration_hours=float(d["tcHours"]), initial_stage_ft=float(d["initialStageFt"]),
         stage_storage=StageStorageCurve(points=points), structures=structures,
+        berm_elevation_ft=float(d["bermElevationFt"]) if d.get("bermElevationFt") not in (None, "") else None,
     )
 
 
@@ -195,13 +196,35 @@ def run_project(data: Dict[str, Any]) -> Dict[str, Any]:
     scenario_payload = []
     for sid, r in sorted(results.items()):
         basin_ids = list(r.network_result.peak_stage_ft.keys())
+        condition_basins = project.conditions[r.scenario.condition_name].network.basins
         basins_out = []
         for bid in basin_ids:
             mb = r.network_result.mass_balance[bid]
+            peak_stage = r.network_result.peak_stage_ft[bid]
+            berm_elevation = condition_basins[bid].berm_elevation_ft
+            freeboard_ft = (berm_elevation - peak_stage) if berm_elevation is not None else None
+            steps = r.network_result.time_series[bid]
             basins_out.append({
                 "basinId": bid,
-                "peakStageFt": r.network_result.peak_stage_ft[bid],
+                "peakStageFt": peak_stage,
                 "peakStageTimeHours": r.network_result.peak_stage_time_hours[bid],
+                "bermElevationFt": berm_elevation,
+                "freeboardFt": freeboard_ft,
+                # Full time series for the hydrograph visualization (#7):
+                # inflow (basin runoff), the two ways flow leaves the
+                # basin (offsite discharge, onsite disposal), and stage,
+                # all against the same time axis -- exactly what
+                # hydraulics/network.py already computes and stores per
+                # step, just not previously exposed over the API.
+                "timeSeries": {
+                    "tHours": [s.time_hours for s in steps],
+                    "stageFt": [s.stage_ft for s in steps],
+                    "inflowCfs": [s.external_inflow_cfs for s in steps],
+                    "offsiteCfs": [s.local_offsite_discharge_cfs for s in steps],
+                    "onsiteCfs": [s.local_onsite_disposal_cfs for s in steps],
+                    "interbasinInflowCfs": [s.interbasin_inflow_cfs for s in steps],
+                    "interbasinOutflowCfs": [s.interbasin_outflow_cfs for s in steps],
+                },
                 "massBalance": {
                     "externalInflowAF": mb.external_inflow_acre_ft,
                     "interbasinInflowAF": mb.interbasin_inflow_acre_ft,
@@ -315,6 +338,7 @@ def _exfiltration_from_dict(d: Dict[str, Any]) -> ExfiltrationTrench:
         trench_width_ft=_req_float(d, "trenchWidthFt", "Trench Width, W (ft)"),
         actual_trench_length_ft=_req_float(d, "actualTrenchLengthFt", "Provided Trench Length (ft)"),
         hydraulic_conductivity_k=_req_float(d, "hydraulicConductivityK", "K (cfs/ft²-ft)"),
+        pipe_diameter_in=float(d["pipeDiameterIn"]) if d.get("pipeDiameterIn") not in (None, "") else None,
         factor_of_safety=float(d.get("factorOfSafety", 2.0)),
         h2_method=method,
         user_defined_h2_ft=float(d["userDefinedH2Ft"]) if d.get("userDefinedH2Ft") not in (None, "") else None,
@@ -456,6 +480,77 @@ def run_storage_calcs(data: Dict[str, Any]) -> Dict[str, Any]:
         out["exfiltration"] = report
 
     return out
+
+
+def suggest_trench_options(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Future-improvement #4 ("Trench size auto suggestion"): holds every
+    exfiltration input fixed except width, tries a range of widths, and
+    reports the required length and rock volume at each -- so a
+    width/length combination can be chosen that meets the required
+    treatment volume with the least rock fill. Reuses build_storage_objects
+    so this sees exactly the same required-volume-after-swale-credit
+    figure the main Calculate button uses (one place that interprets
+    the storageWQ payload, per this module's own rule).
+    """
+    objs = build_storage_objects(data)
+    trench = objs["trench"]
+    if trench is None:
+        raise AdapterError(
+            "Fill in the Exfiltration Trench section (elevations, width, K, ...) before requesting "
+            "width/length suggestions -- the suggestion holds those inputs fixed and only varies width."
+        )
+
+    exf_data = data.get("exfiltration", {}) or {}
+    width_options = exf_data.get("suggestWidthOptionsFt")
+    if width_options:
+        width_options = [float(w) for w in width_options]
+    else:
+        min_w = float(exf_data.get("suggestMinWidthFt", 2.0) or 2.0)
+        max_w = float(exf_data.get("suggestMaxWidthFt", 12.0) or 12.0)
+        step = float(exf_data.get("suggestWidthStepFt", 0.5) or 0.5)
+        if min_w <= 0 or step <= 0 or max_w < min_w:
+            raise AdapterError("Suggestion width range must have min > 0, step > 0, and max >= min.")
+        width_options = []
+        w = min_w
+        while w <= max_w + 1e-9:
+            width_options.append(round(w, 4))
+            w += step
+
+    available_length = exf_data.get("suggestAvailableLengthFt")
+    available_length = float(available_length) if available_length not in (None, "") else None
+
+    rows = trench.suggest_trench_widths(
+        objs["required_for_trench_cuft"],
+        width_options_ft=width_options,
+        available_length_ft=available_length,
+    )
+    return {
+        "options": rows,
+        "requiredVolumeCuft": objs["required_for_trench_cuft"],
+        "requiredVolumeBasisLabel": objs["required_volume_basis_label"],
+        "availableLengthFt": available_length,
+    }
+
+
+def suggest_pond_options(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Future-improvement #4's pond counterpart -- a quick footprint
+    estimate (prismoidal formula, storage/pond.py) for a target storage
+    volume, depth, and side slope. A planning aid, not a stage-storage
+    curve; the chosen footprint should still be modeled as a real basin
+    for the routing engine to see it."""
+    from storage.pond import suggest_pond_footprint, PondSizingError
+
+    try:
+        result = suggest_pond_footprint(
+            required_volume_cuft=_req_float(data, "requiredVolumeCuft", "Required Volume (CF)"),
+            depth_ft=_req_float(data, "depthFt", "Depth (ft)"),
+            side_slope_h_per_v=float(data.get("sideSlopeHPerV", 4.0) or 4.0),
+            length_to_width_ratio=float(data.get("lengthToWidthRatio", 1.5) or 1.5),
+        )
+    except PondSizingError as e:
+        raise AdapterError(str(e))
+    return result.as_dict()
 
 
 def merge_swale_storage_into_basin(basin_stage_points: list, swales_data: list) -> list:
