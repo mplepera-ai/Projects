@@ -82,6 +82,7 @@ def _basin_to_dict(b: Basin) -> Dict[str, Any]:
         "initial_stage_ft": b.initial_stage_ft,
         "stage_storage_points": [list(p) for p in b.stage_storage.points],
         "structures": [_structure_to_dict(s) for s in b.structures],
+        "berm_elevation_ft": b.berm_elevation_ft,
     }
 
 
@@ -93,6 +94,7 @@ def _basin_from_dict(d: Dict[str, Any]) -> Basin:
         ground_storage_inches=d["ground_storage_inches"],
         time_of_concentration_hours=d["time_of_concentration_hours"],
         initial_stage_ft=d["initial_stage_ft"], stage_storage=curve, structures=structures,
+        berm_elevation_ft=d.get("berm_elevation_ft"),
     )
 
 
