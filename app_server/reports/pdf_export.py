@@ -131,6 +131,20 @@ def _comparison_table(results: Dict[str, ScenarioRunResult], styles) -> List:
     return story
 
 
+def _design_narrative_section(section: Dict, styles) -> List:
+    """Renders one {"heading", "paragraphs"} dict from
+    reports/generator.py's design_narrative_* functions -- those
+    functions are the single source of the actual wording, shared with
+    the Markdown report, so this PDF path only formats them and never
+    restates the boilerplate text itself (avoids the two report formats
+    drifting apart)."""
+    story = [Paragraph(section["heading"], styles["SectionHeading"])]
+    for p in section["paragraphs"]:
+        story.append(Paragraph(p, styles["ReportBody"]))
+        story.append(Spacer(1, 0.08 * inch))
+    return story
+
+
 def _qa_section(findings: List[Finding], styles) -> List:
     story = [Paragraph("QA/QC Summary", styles["SectionHeading"])]
     if not findings:
@@ -190,8 +204,9 @@ def export_permit_report_pdf(
     findings: List[Finding],
     output_path: str,
     options=None,
+    storage_ctx: Dict = None,
 ) -> str:
-    from reports.generator import ReportOptions
+    from reports.generator import ReportOptions, design_narrative_intro_sections, design_narrative_conclusion_section
     if options is None:
         options = ReportOptions()
     styles = _styles()
@@ -208,12 +223,19 @@ def export_permit_report_pdf(
     if options.include_permit_criteria:
         story.extend(_permit_criteria_section(project, styles))
         story.append(Spacer(1, 0.2 * inch))
+    if options.include_design_narrative:
+        for section in design_narrative_intro_sections(project, storage_ctx):
+            story.extend(_design_narrative_section(section, styles))
+        story.append(Spacer(1, 0.1 * inch))
     if options.include_final_summary_table:
         story.extend(_summary_table(project, results, styles))
         story.append(Spacer(1, 0.25 * inch))
     if options.include_comparison_table:
         story.extend(_comparison_table(results, styles))
         story.append(Spacer(1, 0.25 * inch))
+    if options.include_design_narrative:
+        story.extend(_design_narrative_section(design_narrative_conclusion_section(project), styles))
+        story.append(Spacer(1, 0.15 * inch))
     if options.include_qa_summary:
         story.extend(_qa_section(findings, styles))
 

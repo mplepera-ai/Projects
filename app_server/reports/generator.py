@@ -33,6 +33,15 @@ class ReportOptions:
     include_final_summary_table: bool = True
     include_comparison_table: bool = True
     include_qa_summary: bool = True
+    # Section: design narrative. Off by default -- most reports still
+    # just want the Permit Criteria paragraph. When on, adds the fuller
+    # boilerplate narrative (FEMA flood zone, Water Quantity/Quality
+    # Criteria detail, Proposed Design Parameters, Water Table Elevation,
+    # Conclusion and Recommendations) that the firm's separate "Narrative
+    # from Drainage Report" document currently carries, so it can be
+    # generated alongside the Permit Criteria Narrative instead of as a
+    # standalone document.
+    include_design_narrative: bool = False
     # Which scenarios get full Cascade-style detailed output. None = all
     # enabled scenarios; empty set = none; otherwise a set of scenario_ids.
     cascade_detail_scenario_ids: Optional[Set[str]] = None
@@ -105,11 +114,129 @@ def final_model_summary_table(project: Project, results: Dict[str, ScenarioRunRe
     return "\n".join(lines)
 
 
+def _fill(value: str, placeholder: str) -> str:
+    """Every design-narrative fact that isn't tracked by the project
+    renders as a bracketed placeholder rather than being silently
+    dropped -- this is what lets the generated narrative double as the
+    "print it and fill in the blanks" document the engineer asked
+    about, instead of only ever working when every field happens to be
+    populated."""
+    value = (value or "").strip()
+    return value if value else f"[{placeholder}]"
+
+
+def design_narrative_intro_sections(project: Project, storage_ctx: Optional[Dict] = None) -> List[Dict]:
+    """The boilerplate narrative sections that precede the numeric
+    results (Section: design narrative) -- Water Quantity Criteria detail,
+    FEMA Flood Zone, Water Quality Criteria detail, Proposed Design
+    Parameters, and Water Table Elevation. Returns a list of
+    {"heading": str, "paragraphs": [str, ...]} in the order they should
+    appear. storage_ctx is api.adapter.build_narrative_context(...)'s
+    output (or None if no storage/WQ data was supplied); its numbers are
+    only ever formatted here, never recomputed (Section 71)."""
+    m = project.metadata
+    ctx = storage_ctx or {}
+    sections: List[Dict] = []
+
+    sections.append({
+        "heading": "Water Quantity Criteria",
+        "paragraphs": [
+            "**Parking Lot Flood Protection:** The proposed stormwater management system has been "
+            "designed such that the 5-year/24-hour storm event peak stage remains below the lowest "
+            "adjacent inlet or catch basin rim elevation, in accordance with the governing agency's "
+            "flood protection criteria.",
+            "**Off-Site Discharge:** The system has been analyzed for the 25-year/72-hour storm event. "
+            "The proposed condition peak stage/discharge is equal to or lower than the existing condition "
+            "for this event, or an equivalent berm/control has been provided where required, such that "
+            "no net increase in off-site discharge results from the proposed development.",
+            f"**Building Flood Protection:** Finished floor elevations have been set at or above the "
+            f"greater of the 100-year/72-hour flood elevation plus 1.0 foot of freeboard, or the "
+            f"Design Flood Elevation (DFE), per the governing agency's criteria.",
+        ],
+    })
+
+    sections.append({
+        "heading": "FEMA Flood Zone",
+        "paragraphs": [
+            f"The subject property is located within FEMA Flood Insurance Rate Map (FIRM) "
+            f"Community-Panel Number {_fill(m.fema_community_panel, 'FEMA COMMUNITY-PANEL NUMBER')}, "
+            f"Flood Zone {_fill(m.fema_flood_zone, 'FEMA FLOOD ZONE')}, with a Base Flood Elevation "
+            f"(BFE) of {_fill(m.fema_bfe_navd, 'BFE, FT NAVD')} ({m.vertical_datum}).",
+        ],
+    })
+
+    wq_paras = [
+        "The proposed stormwater management system provides water quality treatment in accordance "
+        "with the governing agency's volumetric water quality criteria: the required treatment volume "
+        "is the greater of 1.0 inch of runoff over the total project area, or 2.5 inches of runoff over "
+        "the impervious area, less any applicable dry detention or retention credit.",
+    ]
+    if "wqRequiredAcFt" in ctx and "wqProvidedAcFt" in ctx:
+        wq_paras.append(
+            f"Required water quality volume: {ctx['wqRequiredAcFt']:.3f} ac-ft. "
+            f"Volume provided: {ctx['wqProvidedAcFt']:.3f} ac-ft via "
+            f"{ctx.get('wqProvidedSource', 'on-site storage')}."
+        )
+    if "pretreatmentRequiredAcFt" in ctx:
+        prov = ctx.get("pretreatmentProvidedAcFt")
+        wq_paras.append(
+            f"Pre-treatment (½-inch) volume required: {ctx['pretreatmentRequiredAcFt']:.3f} ac-ft. "
+            + (f"Volume provided: {prov:.3f} ac-ft." if prov is not None else "")
+        )
+    if "equivalentRainfallReductionIn" in ctx:
+        wq_paras.append(
+            f"Exfiltration trench storage has been converted to an equivalent depth of rainfall "
+            f"and subtracted from the design storm events in the proposed condition, per the "
+            f"governing agency's exfiltration trench methodology: "
+            f"{ctx['equivalentRainfallReductionIn']:.2f} inches."
+        )
+    sections.append({"heading": "Water Quality Criteria", "paragraphs": wq_paras})
+
+    sections.append({
+        "heading": "Proposed Design Parameters",
+        "paragraphs": [
+            _fill(m.system_narrative, "DESCRIBE THE PROPOSED STORMWATER MANAGEMENT SYSTEM — "
+                  "e.g., catch basins, exfiltration trenches, dry detention/retention areas, "
+                  "drainage wells, and how runoff is conveyed from the site"),
+        ],
+    })
+
+    water_table_placeholder = (
+        "SOURCE OF DESIGN WATER TABLE ELEVATION — e.g., Broward County 20XX Future Condition "
+        "Average Wet Season Groundwater Elevation map, or a project-specific geotechnical report"
+    )
+    sections.append({
+        "heading": "Water Table Elevation",
+        "paragraphs": [
+            f"The design water table elevation used in this analysis was obtained from "
+            f"{_fill(m.design_water_table_source, water_table_placeholder)}.",
+        ],
+    })
+
+    return sections
+
+
+def design_narrative_conclusion_section(project: Project) -> Dict:
+    """The closing "Conclusion and Recommendations" narrative section."""
+    m = project.metadata
+    return {
+        "heading": "Conclusion and Recommendations",
+        "paragraphs": [
+            f"Based on the analysis presented herein, the proposed stormwater management system for "
+            f"{m.project_name or '[PROJECT NAME]'} has been designed to meet the applicable water "
+            f"quantity and water quality criteria of "
+            f"{m.regulatory_agency or '[REGULATORY AGENCY]'}. The system is recommended for permitting "
+            f"as designed.",
+        ],
+    }
+
+
 def permit_summary_markdown(
     project: Project,
     results: Dict[str, ScenarioRunResult],
     findings: List[Finding],
     options: Optional[ReportOptions] = None,
+    storage_ctx: Optional[Dict] = None,
 ) -> str:
     """Section 46-59: the narrative-first permit-style report. Every
     section below is gated on `options` (Section 44's checkboxes) --
@@ -148,11 +275,27 @@ def permit_summary_markdown(
             "",
         ])
 
+    if options.include_design_narrative:
+        for section in design_narrative_intro_sections(project, storage_ctx):
+            lines.append(f"## {section['heading']}")
+            lines.append("")
+            for p in section["paragraphs"]:
+                lines.append(p)
+                lines.append("")
+
     if options.include_final_summary_table:
         lines.extend([final_model_summary_table(project, results), ""])
 
     if options.include_comparison_table:
         lines.extend([comparison_summary_markdown(results), ""])
+
+    if options.include_design_narrative:
+        concl = design_narrative_conclusion_section(project)
+        lines.append(f"## {concl['heading']}")
+        lines.append("")
+        for p in concl["paragraphs"]:
+            lines.append(p)
+            lines.append("")
 
     if options.include_qa_summary:
         lines.extend([qa_summary_markdown(findings), ""])

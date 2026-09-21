@@ -9,16 +9,18 @@ the Cascade model (independent of the main permit report/PDF).
 """
 
 from __future__ import annotations
+import tempfile
 from typing import List, Optional
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
 from reportlab.lib import colors
 
 from storage.runoff_volume import RunoffVolumeResult
 from storage.swale import Swale
 from storage.exfiltration import ExfiltrationTrench
+from reports.trench_section import draw_exfiltration_trench_section
 
 
 def _styles():
@@ -57,6 +59,7 @@ def export_swale_exfiltration_calc_pdf(
     required_wq_volume_cuft: float,
     required_volume_basis_label: str = "Proposed Runoff Volume",
     required_volume_before_swale_credit_cuft: Optional[float] = None,
+    pavement_elevation_ft: Optional[float] = None,
 ) -> str:
     styles = _styles()
     doc = SimpleDocTemplate(output_path, pagesize=letter,
@@ -178,6 +181,18 @@ def export_swale_exfiltration_calc_pdf(
             story.append(Spacer(1, 0.1 * inch))
             for w in report["warnings"]:
                 story.append(Paragraph(f"&bull; {w}", styles["CalcBody"]))
+
+        # Typical trench cross-section, drawn from this same trench's
+        # numbers (Section 71: the drawing formats already-computed
+        # elevations, it doesn't invent or re-derive any of them). Layout
+        # matches the firm's standard hand-drawn "TYP. EXFILTRATION
+        # TRENCH SECTION" detail; only the elevations/labels and the
+        # water-table line's position change per project.
+        story.append(Spacer(1, 0.2 * inch))
+        story.append(Paragraph("Typical Exfiltration Trench Section", styles["CalcHeading"]))
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_png:
+            draw_exfiltration_trench_section(t, tmp_png.name, pavement_elevation_ft=pavement_elevation_ft)
+            story.append(Image(tmp_png.name, width=5.5 * inch, height=5.5 * inch * 0.75, kind="proportional"))
 
         if report.get("pipe_diameter_in"):
             story.append(Spacer(1, 0.15 * inch))
