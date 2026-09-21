@@ -143,6 +143,12 @@ def build_project_from_app_json(data: Dict[str, Any]) -> Project:
         engineering_firm=m.get("firm", ""),
         regulatory_agency=m.get("agency", ""),
         report_date=m.get("date", ""),
+        fema_community_panel=m.get("femaCommunityPanel", ""),
+        fema_flood_zone=m.get("femaFloodZone", ""),
+        fema_bfe_navd=m.get("femaBfeNavd", ""),
+        broward_flood_criteria_navd=m.get("browardFloodCriteriaNavd", ""),
+        design_water_table_source=m.get("waterTableSource", ""),
+        system_narrative=m.get("systemNarrative", ""),
     )
 
     storms = data.get("storms", {})
@@ -268,6 +274,7 @@ def build_report_options(opts: Dict[str, Any]) -> ReportOptions:
         include_final_summary_table=bool(opts.get("summary", True)),
         include_comparison_table=bool(opts.get("comparison", True)),
         include_qa_summary=bool(opts.get("qa", True)),
+        include_design_narrative=bool(opts.get("designNarrative", False)),
         cascade_detail_scenario_ids=set() if not opts.get("detail", False) else None,
     )
 
@@ -283,6 +290,7 @@ from storage.runoff_volume import compute_runoff_volume
 from storage.swale import Swale, make_area_based_swale, merge_swales_into_basin_curve
 from storage.exfiltration import ExfiltrationTrench, H2Method
 from storage.water_quality import LegacyVolumetricInputs, calculate_legacy_volumetric, calculate_custom
+from core.units import CUFT_TO_ACRE_IN
 
 
 def _swale_from_dict(d: Dict[str, Any]) -> Swale:
@@ -477,9 +485,80 @@ def run_storage_calcs(data: Dict[str, Any]) -> Dict[str, Any]:
         report["requiredVolumeAfterSwaleCreditCuft"] = objs["required_for_trench_cuft"]
         report["requiredVolumeBasisLabel"] = objs["required_volume_basis_label"]
         report["requiredVolumeBeforeSwaleCreditCuft"] = objs["required_volume_before_swale_credit_cuft"]
+
+        # Equivalent-rainfall-reduction credit: converts the trench's
+        # treatment volume to an equivalent depth of rainfall over the
+        # PROPOSED site area (ac-in of volume / site acres = inches).
+        # This is the same conversion the firm's own submitted, permitted
+        # reports use to document "exfiltration trench storage has been
+        # converted to an amount of rainfall in inches to be subtracted
+        # from the design storm events in the Proposed condition" --
+        # confirmed against a real Broward SWM submittal. It is reported
+        # here as an informational value only: this software does not
+        # automatically subtract it from any storm's rainfall depth,
+        # since which storms it's applied to (and whether at all) is an
+        # engineering/permitting judgment call the engineer of record
+        # makes per project, the same way it would be hand-applied in
+        # Cascade.
+        sa = data.get("siteAreas", {}) or {}
+        proposed_sqft = sa.get("proposedSiteSqft")
+        if not _blank(proposed_sqft):
+            site_acres = float(proposed_sqft) / 43560.0
+            if site_acres > 0:
+                credit_ac_in = objs["required_for_trench_cuft"] * CUFT_TO_ACRE_IN
+                report["equivalentRainfallReductionIn"] = credit_ac_in / site_acres
+                report["equivalentRainfallReductionAcIn"] = credit_ac_in
+
         out["exfiltration"] = report
 
     return out
+
+
+def build_narrative_context(data: Dict[str, Any]) -> Dict[str, Any]:
+    """A handful of storage/water-quality numbers the optional design-
+    narrative report sections (reports/generator.py's
+    design_narrative_intro_sections / design_narrative_conclusion_section)
+    fold into boilerplate text. Reuses build_storage_objects so these
+    numbers can never drift from what the Storage & Water Quality tab
+    itself shows -- this function only re-packages already-computed
+    results, never recalculates (same rule as the report renderers)."""
+    ctx: Dict[str, Any] = {}
+    if not data:
+        return ctx
+
+    objs = build_storage_objects(data)
+
+    sa = data.get("siteAreas", {}) or {}
+    proposed_sqft = sa.get("proposedSiteSqft")
+    site_acres = float(proposed_sqft) / 43560.0 if not _blank(proposed_sqft) else None
+
+    if objs["trench"] is not None:
+        report = objs["trench"].report(objs["required_for_trench_cuft"])
+        ctx["wqProvidedAcFt"] = report["provided_capacity_ac_ft"]
+        ctx["wqProvidedSource"] = "Exfiltration Trench(es)"
+        ctx["exfiltrationTrenchLengthProvidedFt"] = report["provided_length_ft"]
+        ctx["exfiltrationTrenchStatus"] = report["status"]
+        if site_acres:
+            credit_ac_in = objs["required_for_trench_cuft"] * CUFT_TO_ACRE_IN
+            ctx["equivalentRainfallReductionIn"] = credit_ac_in / site_acres
+    elif objs["wq_result"] is not None:
+        ctx["wqProvidedAcFt"] = objs["wq_result"].provided_volume_ac_in / 12.0
+        ctx["wqProvidedSource"] = "on-site storage"
+
+    if objs["wq_result"] is not None:
+        ctx["wqRequiredAcFt"] = objs["wq_result"].net_required_volume_ac_in / 12.0
+
+    if site_acres:
+        ctx["pretreatmentRequiredAcFt"] = 0.5 / 12.0 * site_acres
+        if "wqProvidedAcFt" in ctx:
+            ctx["pretreatmentProvidedAcFt"] = ctx["wqProvidedAcFt"]
+
+    if objs.get("proposed_runoff") is not None:
+        ctx["soilStorageProposedIn"] = objs["proposed_runoff"].effective_storage_inches
+    if objs.get("existing_runoff") is not None:
+        ctx["soilStorageExistingIn"] = objs["existing_runoff"].effective_storage_inches
+
+    return ctx
 
 
 def suggest_trench_options(data: Dict[str, Any]) -> Dict[str, Any]:
