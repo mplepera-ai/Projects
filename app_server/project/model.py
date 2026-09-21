@@ -33,6 +33,22 @@ class ProjectMetadata:
     permit_number: str = ""
     report_date: str = ""
 
+    # Narrative-report-only fields (Section: design narrative). None of
+    # these feed any calculation -- they're free-text/reference facts
+    # that only appear in the optional narrative report sections
+    # (reports/generator.py's design_narrative_* functions), matching
+    # facts a reviewer expects in a drainage report narrative but that
+    # this project has no other reason to track (FEMA panel lookup,
+    # geotechnical/water-table source, a plain-English system
+    # description). Left blank, the narrative renders a bracketed
+    # placeholder rather than silently omitting the fact.
+    fema_community_panel: str = ""
+    fema_flood_zone: str = ""
+    fema_bfe_navd: str = ""
+    broward_flood_criteria_navd: str = ""
+    design_water_table_source: str = ""
+    system_narrative: str = ""
+
 
 @dataclass
 class Condition:
