@@ -34,7 +34,7 @@ from flask import Flask, request, jsonify, send_file, Response
 from api.adapter import (
     run_project, build_project_from_app_json, build_report_options, AdapterError,
     run_storage_calcs, build_storage_objects, merge_swale_storage_into_basin,
-    suggest_trench_options, suggest_pond_options,
+    suggest_trench_options, suggest_pond_options, build_narrative_context,
 )
 from reports.pdf_export import export_permit_report_pdf
 from reports.generator import permit_summary_markdown
@@ -73,14 +73,16 @@ def api_report_pdf():
         body = request.get_json(force=True)
         project_data = body["project"]
         options_data = body.get("options", {})
+        storage_data = body.get("storageWQ")
 
         project = build_project_from_app_json(project_data)
         results = run_all_scenarios(project)
         findings = run_qa(project, results)
         options = build_report_options(options_data)
+        storage_ctx = build_narrative_context(storage_data) if storage_data else None
 
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            export_permit_report_pdf(project, results, findings, tmp.name, options)
+            export_permit_report_pdf(project, results, findings, tmp.name, options, storage_ctx)
             tmp_path = tmp.name
 
         filename = (project.metadata.project_name or "drainage-report").strip().lower()
@@ -102,13 +104,15 @@ def api_report_markdown():
         body = request.get_json(force=True)
         project_data = body["project"]
         options_data = body.get("options", {})
+        storage_data = body.get("storageWQ")
 
         project = build_project_from_app_json(project_data)
         results = run_all_scenarios(project)
         findings = run_qa(project, results)
         options = build_report_options(options_data)
+        storage_ctx = build_narrative_context(storage_data) if storage_data else None
 
-        text = permit_summary_markdown(project, results, findings, options)
+        text = permit_summary_markdown(project, results, findings, options, storage_ctx)
         return jsonify({"markdown": text})
     except AdapterError as e:
         return jsonify({"error": str(e)}), 400
@@ -187,6 +191,11 @@ def api_report_calc_pdf():
                 required_wq_volume_cuft=objs["required_for_trench_cuft"],
                 required_volume_basis_label=objs["required_volume_basis_label"],
                 required_volume_before_swale_credit_cuft=objs["required_volume_before_swale_credit_cuft"],
+                pavement_elevation_ft=(
+                    float(data["pavementElevationFt"])
+                    if data.get("pavementElevationFt") not in (None, "")
+                    else None
+                ),
             )
             tmp_path = tmp.name
 

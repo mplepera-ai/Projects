@@ -138,11 +138,12 @@
 
   .field-row { display: grid; grid-template-columns: minmax(90px, 220px) 1fr; gap: 14px; align-items: center; margin-bottom: 12px; }
   .field-row label { font-size: 13px; color: #444; }
-  .field-row input, .field-row select {
+  .field-row input, .field-row select, .field-row textarea {
     font-family: var(--mono); font-size: 13px; padding: 7px 9px;
     border: 1px solid var(--line); border-radius: 2px; background: var(--paper-panel);
     width: 100%;
   }
+  .field-row textarea { resize: vertical; font-family: inherit; }
 
   .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 40px; }
 
@@ -309,6 +310,23 @@
       <div class="field-row"><label>Regulatory agency</label><input id="p-agency" value="Broward County SWM / SFWMD"></div>
       <div class="field-row"><label>Report date</label><input id="p-date" type="date"></div>
 
+      <h2>Design Narrative Facts</h2>
+      <p class="section-note">Feeds the optional Design Narrative report section (Reports tab) -- the boilerplate
+        "Narrative from Drainage Report" language, generated alongside the Permit Criteria Narrative instead of as
+        a separate document. Leave any of these blank and the generated narrative prints a bracketed placeholder
+        in its place, so the report can still be generated, printed, and filled in by hand where a fact isn't
+        tracked here.</p>
+      <div class="field-row"><label>FEMA Community-Panel No.</label><input id="p-fema-panel" value=""></div>
+      <div class="field-row"><label>FEMA Flood Zone</label><input id="p-fema-zone" value=""></div>
+      <div class="field-row"><label>FEMA BFE (ft NAVD)</label><input id="p-fema-bfe" value=""></div>
+      <div class="field-row"><label>Broward Flood Criteria Elev. (ft NAVD)</label><input id="p-flood-criteria" value=""></div>
+      <div class="field-row"><label>Design water table source</label>
+        <input id="p-wt-source" placeholder="e.g. Broward County 2070 Future Condition Average Wet Season Groundwater Elevation map" value="">
+      </div>
+      <div class="field-row"><label>System narrative</label>
+        <textarea id="p-system-narrative" rows="3" placeholder="Plain-English description of the proposed stormwater management system -- catch basins, exfiltration trenches, dry detention/retention, drainage wells, and how runoff is conveyed."></textarea>
+      </div>
+
       <h2>Design Storm Events</h2>
       <p class="section-note">Rainfall depths are engine defaults (placeholder shapes, not verified SFWMD curves) -- edit to match the project's actual isohyetal-map values before relying on results.</p>
       <table>
@@ -346,6 +364,7 @@
 
       <div class="checkbox-row"><input type="checkbox" id="opt-cover" checked><label for="opt-cover">Cover page</label></div>
       <div class="checkbox-row"><input type="checkbox" id="opt-criteria" checked><label for="opt-criteria">Permit criteria narrative</label></div>
+      <div class="checkbox-row"><input type="checkbox" id="opt-designnarrative"><label for="opt-designnarrative">Design narrative (FEMA flood zone, water quantity/quality criteria detail, proposed design parameters, water table elevation, conclusion &amp; recommendations) -- the "Narrative from Drainage Report" boilerplate, generated here instead of as a separate document</label></div>
       <div class="checkbox-row"><input type="checkbox" id="opt-summary" checked><label for="opt-summary">Final model summary table</label></div>
       <div class="checkbox-row"><input type="checkbox" id="opt-comparison" checked><label for="opt-comparison">Existing vs. proposed comparison</label></div>
       <div class="checkbox-row"><input type="checkbox" id="opt-qa" checked><label for="opt-qa">QA/QC summary</label></div>
@@ -418,7 +437,8 @@ const state = {
       lowestOverflowElevationFt: "", designWaterSurfaceFt: "", trenchWidthFt: "", actualTrenchLengthFt: "",
       hydraulicConductivityK: "", pipeDiameterIn: "", factorOfSafety: 2.0, h2Method: "SFWMD_STANDARD",
       userDefinedH2Ft: "", effectiveHeadFt: "", percentWqRequired: 1.0, requiredVolumeBasis: "waterQuality",
-      suggestMinWidthFt: 2.0, suggestMaxWidthFt: 12.0, suggestWidthStepFt: 0.5, suggestAvailableLengthFt: "" },
+      suggestMinWidthFt: 2.0, suggestMaxWidthFt: 12.0, suggestWidthStepFt: 0.5, suggestAvailableLengthFt: "",
+      pavementElevationFt: "" },
     pondSizing: { requiredVolumeCuft: "", depthFt: "", sideSlopeHPerV: 4.0, lengthToWidthRatio: 1.5 },
   },
   storageResults: null,
@@ -793,6 +813,12 @@ function collectProjectPayload() {
       engineer: document.getElementById("p-engineer").value, pe: document.getElementById("p-pe").value,
       firm: document.getElementById("p-firm").value, agency: document.getElementById("p-agency").value,
       date: document.getElementById("p-date").value,
+      femaCommunityPanel: document.getElementById("p-fema-panel").value,
+      femaFloodZone: document.getElementById("p-fema-zone").value,
+      femaBfeNavd: document.getElementById("p-fema-bfe").value,
+      browardFloodCriteriaNavd: document.getElementById("p-flood-criteria").value,
+      waterTableSource: document.getElementById("p-wt-source").value,
+      systemNarrative: document.getElementById("p-system-narrative").value,
     },
     storms: {
       y5: { dur: document.getElementById("storm-5yr-dur").value, depth: document.getElementById("storm-5yr-depth").value },
@@ -882,6 +908,7 @@ function collectReportOptions() {
     summary: document.getElementById("opt-summary").checked,
     comparison: document.getElementById("opt-comparison").checked,
     qa: document.getElementById("opt-qa").checked,
+    designNarrative: document.getElementById("opt-designnarrative").checked,
     detail: document.getElementById("opt-detail").checked,
   };
 }
@@ -892,7 +919,7 @@ async function generateReport() {
   try {
     const resp = await fetch("/api/report/markdown", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ project: collectProjectPayload(), options: collectReportOptions() }),
+      body: JSON.stringify({ project: collectProjectPayload(), options: collectReportOptions(), storageWQ: collectStorageWQPayload() }),
     });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || "Unknown server error");
@@ -910,7 +937,7 @@ async function downloadPdfReport() {
   try {
     const resp = await fetch("/api/report/pdf", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ project: collectProjectPayload(), options: collectReportOptions() }),
+      body: JSON.stringify({ project: collectProjectPayload(), options: collectReportOptions(), storageWQ: collectStorageWQPayload() }),
     });
     if (!resp.ok) {
       const data = await resp.json();
@@ -957,6 +984,12 @@ function collectProjectData() {
       firm: document.getElementById("p-firm").value,
       agency: document.getElementById("p-agency").value,
       date: document.getElementById("p-date").value,
+      femaCommunityPanel: document.getElementById("p-fema-panel").value,
+      femaFloodZone: document.getElementById("p-fema-zone").value,
+      femaBfeNavd: document.getElementById("p-fema-bfe").value,
+      browardFloodCriteriaNavd: document.getElementById("p-flood-criteria").value,
+      waterTableSource: document.getElementById("p-wt-source").value,
+      systemNarrative: document.getElementById("p-system-narrative").value,
     },
     storms: {
       y5: { dur: document.getElementById("storm-5yr-dur").value, depth: document.getElementById("storm-5yr-depth").value },
@@ -1007,6 +1040,12 @@ function applyProjectData(data) {
   document.getElementById("p-firm").value = m.firm || "";
   document.getElementById("p-agency").value = m.agency || "";
   document.getElementById("p-date").value = m.date || "";
+  document.getElementById("p-fema-panel").value = m.femaCommunityPanel || "";
+  document.getElementById("p-fema-zone").value = m.femaFloodZone || "";
+  document.getElementById("p-fema-bfe").value = m.femaBfeNavd || "";
+  document.getElementById("p-flood-criteria").value = m.browardFloodCriteriaNavd || "";
+  document.getElementById("p-wt-source").value = m.waterTableSource || "";
+  document.getElementById("p-system-narrative").value = m.systemNarrative || "";
 
   const st = data.storms || {};
   if (st.y5) { document.getElementById("storm-5yr-dur").value = st.y5.dur; document.getElementById("storm-5yr-depth").value = st.y5.depth; }
@@ -1217,6 +1256,9 @@ function renderStoragePanel() {
             <option value="runoffVolume" ${s.exfiltration.requiredVolumeBasis==="runoffVolume"?"selected":""}>Proposed runoff volume (minus swale credit)</option>
             <option value="waterQuality" ${s.exfiltration.requiredVolumeBasis==="waterQuality"?"selected":""}>Water quality required volume (minus swale credit)</option>
           </select>
+        </div>
+        <div class="field-row"><label>Pavement/grade elevation (ft)</label>
+          <input data-ex="pavementElevationFt" placeholder="blank = top of trench + 2.5' (assumed)" value="${s.exfiltration.pavementElevationFt}">
         </div>
       </div>
 
@@ -1567,6 +1609,7 @@ function collectStorageWQPayload() {
       projectAreaAcres: effectiveProjectAreaAcres(state.storageWQ),
     }),
     exfiltration: state.storageWQ.exfiltration,
+    pavementElevationFt: state.storageWQ.exfiltration.pavementElevationFt,
   };
 }
 
@@ -1632,6 +1675,15 @@ function renderStorageResults(data) {
       <tr><td>Provided Length</td><td class="num">${ex.provided_length_ft.toFixed(1)} LF</td></tr>
       <tr><td>Status</td><td>${badge}</td></tr>
     </table>`;
+    if (ex.equivalentRainfallReductionIn != null) {
+      html += `<div class="callout"><b>Equivalent rainfall reduction credit: ${ex.equivalentRainfallReductionIn.toFixed(2)} in.</b>
+        The trench's treatment volume (${ex.requiredVolumeAfterSwaleCreditCuft.toFixed(0)} CF), converted to a depth of
+        rainfall over the proposed site area, per the same "exfiltration trench storage converted to an amount of
+        rainfall in inches" methodology used on prior submitted reports. This is informational only &mdash; it is
+        <b>not</b> automatically subtracted from any storm's rainfall depth here; whether and to which storm event(s)
+        it's applied in the proposed condition remains the engineer of record's judgment call, same as when
+        hand-applied in Cascade.</div>`;
+    }
     if (ex.warnings && ex.warnings.length) {
       html += ex.warnings.map(w => `<div class="callout warning"><span class="badge review">WARNING</span> ${w}</div>`).join("");
     }
