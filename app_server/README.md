@@ -1,4 +1,4 @@
-# Stormwater Drainage Calculations -- Local App
+# StormRoute -- Stormwater Routing & Permitting
 
 ## Starting the app (Windows -- the easy way)
 
