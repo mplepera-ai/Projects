@@ -14,7 +14,7 @@ from typing import Any, Dict
 from dewatering.calculations import (
     AquiferParams, AquiferType, Zone, compute_zone, check_zone_overlap,
     summarize_water_balance, PermitThresholds, screen_permit_thresholds,
-    TankInputs, design_settling_tank,
+    TankInputs, design_settling_tank, MinTankInputs, size_minimum_settling_tank,
 )
 
 
@@ -70,15 +70,25 @@ def build_zones(zones_data: list) -> list:
     return zones
 
 
-def run_dewatering(data: Dict[str, Any]) -> Dict[str, Any]:
+def _run_core(data: Dict[str, Any]) -> Dict[str, Any]:
     """
+    Shared computation used by both run_dewatering() (JSON for the browser)
+    and build_report_objects() (raw dataclasses for the backup-formulas PDF)
+    -- keeps a single source of truth for how the payload is interpreted so
+    the report can never show different numbers than the app does.
+
     data = {
       aquifer: {kFtDay, aquiferThicknessFt, aquiferType},
       zones: [{name, description, gwElevFt, excBottomElevFt, operatingMarginFt,
                 widthFt, lengthFt, hoursPerDay, estimatedDays, numberOfElements}, ...],
       permitThresholds: {maxAverageGpm?, maxDailyMgd?, maxDurationDays?},
-      tank: {lengthFt, widthFt, depthFt, flowGpmOverride?, particleDiameterFt?, specificGravity?}
+      tank: {mode: "manual"|"auto", lengthFt, widthFt, depthFt, flowGpmOverride?,
+             particleDiameterFt?, specificGravity?,
+             autoDepthFt?, autoLengthToWidthRatio?, autoSizeIncrementFt?,
+             autoIncreaseDepthForScour?}
     }
+    Returns raw objects: aquifer, zone_results, zone_errors, overlap_notes,
+    summary, permit_flags, tank_mode, tank_inputs, tank_result, min_tank_result.
     """
     aquifer = build_aquifer(data.get("aquifer", {}))
     zones = build_zones(data.get("zones", []))
@@ -105,9 +115,33 @@ def run_dewatering(data: Dict[str, Any]) -> Dict[str, Any]:
     )
     permit_flags = screen_permit_thresholds(summary, thresholds) if summary else []
 
-    tank_payload = None
     tank_data = data.get("tank")
-    if tank_data and tank_data.get("lengthFt") not in (None, ""):
+    tank_mode = (tank_data or {}).get("mode", "manual")
+    tank_inputs = None
+    tank_result = None
+    min_result = None
+
+    if tank_data and tank_mode == "auto":
+        flow_override = _opt_float(tank_data, "flowGpmOverride")
+        flow_gpm = flow_override if flow_override is not None else (summary.max_flow_gpm if summary else 0.0)
+        min_inputs = MinTankInputs(
+            flow_gpm=flow_gpm,
+            depth_ft=_opt_float(tank_data, "autoDepthFt") or 4.0,
+            length_to_width_ratio=_opt_float(tank_data, "autoLengthToWidthRatio") or 2.0,
+            size_increment_ft=_opt_float(tank_data, "autoSizeIncrementFt") or 1.0,
+            auto_increase_depth_for_scour=bool(tank_data.get("autoIncreaseDepthForScour", True)),
+            particle_diameter_ft=_opt_float(tank_data, "particleDiameterFt") or 0.000279,
+            specific_gravity=_opt_float(tank_data, "specificGravity") or 2.65,
+        )
+        min_result = size_minimum_settling_tank(min_inputs)
+        tank_result = min_result.tank
+        tank_inputs = TankInputs(
+            flow_gpm=min_inputs.flow_gpm, length_ft=min_result.length_ft,
+            width_ft=min_result.width_ft, depth_ft=min_result.depth_ft,
+            particle_diameter_ft=min_inputs.particle_diameter_ft,
+            specific_gravity=min_inputs.specific_gravity,
+        )
+    elif tank_data and tank_data.get("lengthFt") not in (None, ""):
         flow_override = _opt_float(tank_data, "flowGpmOverride")
         flow_gpm = flow_override if flow_override is not None else (summary.max_flow_gpm if summary else 0.0)
         tank_inputs = TankInputs(
@@ -119,8 +153,61 @@ def run_dewatering(data: Dict[str, Any]) -> Dict[str, Any]:
             specific_gravity=_opt_float(tank_data, "specificGravity") or 2.65,
         )
         tank_result = design_settling_tank(tank_inputs)
+
+    return {
+        "aquifer": aquifer,
+        "zone_results": zone_results,
+        "zone_errors": zone_errors,
+        "overlap_notes": overlap_notes,
+        "summary": summary,
+        "permit_flags": permit_flags,
+        "tank_mode": tank_mode,
+        "tank_inputs": tank_inputs,
+        "tank_result": tank_result,
+        "min_result": min_result,
+    }
+
+
+def run_dewatering(data: Dict[str, Any]) -> Dict[str, Any]:
+    core = _run_core(data)
+    zone_results, zone_errors, overlap_notes = core["zone_results"], core["zone_errors"], core["overlap_notes"]
+    summary, permit_flags = core["summary"], core["permit_flags"]
+    tank_mode, tank_inputs, tank_result, min_result = (
+        core["tank_mode"], core["tank_inputs"], core["tank_result"], core["min_result"]
+    )
+
+    tank_payload = None
+    if tank_result is not None and tank_mode == "auto" and min_result is not None:
         tank_payload = {
+            "mode": "auto",
             "flowGpm": tank_inputs.flow_gpm,
+            "requiredSurfaceAreaFt2": min_result.required_surface_area_ft2,
+            "minWidthFt": min_result.min_width_ft,
+            "minLengthFt": min_result.min_length_ft,
+            "lengthFt": min_result.length_ft,
+            "widthFt": min_result.width_ft,
+            "depthFt": min_result.depth_ft,
+            "requestedDepthFt": min_result.requested_depth_ft,
+            "depthWasIncreased": min_result.depth_was_increased,
+            "minDepthForScourFt": min_result.min_depth_for_scour_ft,
+            "volumeCf": tank_result.volume_cf,
+            "volumeGal": tank_result.volume_gal,
+            "detentionTimeMin": tank_result.detention_time_min,
+            "meanHorizontalVelocityFtS": tank_result.mean_horizontal_velocity_ft_s,
+            "settlingVelocityFtS": tank_result.settling_velocity_ft_s,
+            "surfaceOverflowRateGpdFt2": tank_result.surface_overflow_rate_gpd_ft2,
+            "reynoldsNumber": tank_result.reynolds_number,
+            "stokesLawValid": tank_result.stokes_law_valid,
+            "velocityCheckPass": tank_result.velocity_check_pass,
+            "warnings": min_result.warnings + [w for w in tank_result.warnings if w not in min_result.warnings],
+        }
+    elif tank_result is not None and tank_inputs is not None:
+        tank_payload = {
+            "mode": "manual",
+            "flowGpm": tank_inputs.flow_gpm,
+            "lengthFt": tank_inputs.length_ft,
+            "widthFt": tank_inputs.width_ft,
+            "depthFt": tank_inputs.depth_ft,
             "volumeCf": tank_result.volume_cf,
             "volumeGal": tank_result.volume_gal,
             "detentionTimeMin": tank_result.detention_time_min,
@@ -165,3 +252,9 @@ def run_dewatering(data: Dict[str, Any]) -> Dict[str, Any]:
         "permitFlags": permit_flags,
         "tank": tank_payload,
     }
+
+
+def build_report_objects(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Same computation as run_dewatering(), returned as raw dataclasses for
+    reports/dewatering_calc_pdf.py instead of the browser's JSON shape."""
+    return _run_core(data)
