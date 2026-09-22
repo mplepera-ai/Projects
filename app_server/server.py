@@ -36,6 +36,7 @@ from api.adapter import (
     run_storage_calcs, build_storage_objects, merge_swale_storage_into_basin,
     suggest_trench_options, suggest_pond_options, build_narrative_context,
 )
+from api.dewatering_adapter import run_dewatering, DewateringAdapterError
 from reports.pdf_export import export_permit_report_pdf
 from reports.generator import permit_summary_markdown
 from reports.calc_report_pdf import export_swale_exfiltration_calc_pdf
@@ -259,6 +260,18 @@ def api_report_excel():
         return response
     except (AdapterError, KeyError) as e:
         return jsonify({"error": f"Missing or invalid input: {e}"}), 400
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"Server error: {e}"}), 500
+
+
+@app.route("/api/dewatering/run", methods=["POST"])
+def api_dewatering_run():
+    try:
+        data = request.get_json(force=True)
+        return jsonify(run_dewatering(data))
+    except DewateringAdapterError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": f"Server error: {e}"}), 500

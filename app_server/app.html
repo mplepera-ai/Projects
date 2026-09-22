@@ -283,6 +283,7 @@
     <button data-tab="reports"><span class="rail-num">07</span>Reports</button>
     <button data-tab="compare"><span class="rail-num">08</span>Compare Designs</button>
     <button data-tab="hydrograph"><span class="rail-num">09</span>Hydrograph</button>
+    <button data-tab="dewatering"><span class="rail-num">10</span>Dewatering</button>
 
     <div class="rail-file">
       <div class="rail-file-label">Project File</div>
@@ -387,6 +388,9 @@
     <!-- ===================== HYDROGRAPH ===================== -->
     <section class="panel" id="panel-hydrograph"></section>
 
+    <!-- ===================== DEWATERING ===================== -->
+    <section class="panel" id="panel-dewatering"></section>
+
   </main>
 </div>
 
@@ -424,6 +428,16 @@ const state = {
   results: null, // filled by runAll()
   comparison: null,
   findings: null,
+  dewatering: {
+    aquifer: { kFtDay: 25, aquiferThicknessFt: 220, aquiferType: "unconfined" },
+    zones: [
+      { name: "Zone 1", description: "", gwElevFt: "", excBottomElevFt: "", operatingMarginFt: 1.0,
+        widthFt: "", lengthFt: "", hoursPerDay: 12, estimatedDays: 10, numberOfElements: 1 },
+    ],
+    permitThresholds: { maxAverageGpm: "", maxDailyMgd: "", maxDurationDays: "" },
+    tank: { lengthFt: "", widthFt: "", depthFt: "", flowGpmOverride: "", particleDiameterFt: 0.000279, specificGravity: 2.65 },
+    results: null,
+  },
   storageWQ: {
     siteAreas: { existingSiteSqft: "", existingPerviousSqft: "", proposedSiteSqft: "", proposedPerviousSqft: "",
       proposedSameAsExisting: false },
@@ -1111,6 +1125,7 @@ document.querySelectorAll(".rail button[data-tab]").forEach(btn => {
     if (btn.dataset.tab === "storage") populateMergeTargetBasinOptions();
     if (btn.dataset.tab === "compare") renderComparePanel();
     if (btn.dataset.tab === "hydrograph") renderHydrographPanel();
+    if (btn.dataset.tab === "dewatering") renderDewateringPanel();
   });
 });
 
@@ -2294,11 +2309,257 @@ function renderHydrographPanel() {
   });
 }
 
+/* =====================================================================
+   DEWATERING -- excavation dewatering flow, radius of influence, water
+   balance, permit-threshold screening, and settling-tank sizing.
+   Self-contained from the stormwater/routing model above: its own data
+   shape, its own server engine (dewatering/calculations.py via
+   /api/dewatering/run), and its own Save/Open file (a companion tool
+   living in the same app, not merged into the main Project File).
+   ===================================================================== */
+
+const DEWATERING_FILE_SCHEMA_VERSION = "1.0";
+
+function renderDewateringZoneRows() {
+  const d = state.dewatering;
+  return d.zones.map((z, i) => `
+    <div class="zone-row-card" style="border:1px solid var(--line); border-radius:4px; padding:10px 12px; margin-bottom:10px; background:var(--paper-panel); position:relative;">
+      <button class="btn small danger" data-remove-zone="${i}" style="position:absolute; top:8px; right:8px;">Remove</button>
+      <div class="field-row"><label>Zone Name</label><input data-zf="name" data-i="${i}" value="${z.name ?? ""}"></div>
+      <div class="field-row"><label>Description</label><input data-zf="description" data-i="${i}" value="${z.description ?? ""}"></div>
+      <table style="margin:6px 0;">
+        <tr><th></th><th class="num">Value</th><th></th><th class="num">Value</th></tr>
+        <tr><td>Groundwater Elev. (ft)</td><td class="num"><input data-zf="gwElevFt" data-i="${i}" value="${z.gwElevFt ?? ""}"></td>
+            <td>Excavation Bottom Elev. (ft)</td><td class="num"><input data-zf="excBottomElevFt" data-i="${i}" value="${z.excBottomElevFt ?? ""}"></td></tr>
+        <tr><td>Operating Margin Below Bottom (ft)</td><td class="num"><input data-zf="operatingMarginFt" data-i="${i}" value="${z.operatingMarginFt ?? ""}"></td>
+            <td>Width (ft)</td><td class="num"><input data-zf="widthFt" data-i="${i}" value="${z.widthFt ?? ""}"></td></tr>
+        <tr><td>Length (ft)</td><td class="num"><input data-zf="lengthFt" data-i="${i}" value="${z.lengthFt ?? ""}"></td>
+            <td>Hours Pumping / Day</td><td class="num"><input data-zf="hoursPerDay" data-i="${i}" value="${z.hoursPerDay ?? ""}"></td></tr>
+        <tr><td>Estimated Days</td><td class="num"><input data-zf="estimatedDays" data-i="${i}" value="${z.estimatedDays ?? ""}"></td>
+            <td># of Elements (repeats)</td><td class="num"><input data-zf="numberOfElements" data-i="${i}" value="${z.numberOfElements ?? ""}"></td></tr>
+      </table>
+    </div>
+  `).join("");
+}
+
+function renderDewateringPanel() {
+  const d = state.dewatering;
+  const el = document.getElementById("panel-dewatering");
+  el.innerHTML = `
+    <h1>Dewatering Design</h1>
+    <p class="subtitle">Excavation dewatering flow, radius of influence, water balance, permit-threshold screening, and settling-tank sizing. A companion tool to the stormwater model above -- separate calculation, separate save file.</p>
+
+    <div class="rail-file" style="max-width:420px; margin-bottom:20px;">
+      <div class="rail-file-label">Dewatering File</div>
+      <button class="rail-file-btn" id="btn-save-dewatering">Save Dewatering Project</button>
+      <button class="rail-file-btn" id="btn-load-dewatering">Open Dewatering Project&hellip;</button>
+      <input type="file" id="file-load-dewatering" accept="application/json,.json" style="display:none">
+      <div class="rail-file-status" id="dewatering-file-status">Unsaved dewatering project</div>
+    </div>
+
+    <h2>Aquifer Parameters</h2>
+    <div class="field-row"><label>Hydraulic Conductivity, K (ft/day)</label><input data-af="kFtDay" value="${d.aquifer.kFtDay}"></div>
+    <div class="field-row"><label>Aquifer Thickness, H (ft)</label><input data-af="aquiferThicknessFt" value="${d.aquifer.aquiferThicknessFt}"></div>
+    <div class="field-row"><label>Aquifer Type</label>
+      <select data-af="aquiferType">
+        <option value="unconfined" ${d.aquifer.aquiferType === "unconfined" ? "selected" : ""}>Unconfined (Dupuit)</option>
+        <option value="confined" ${d.aquifer.aquiferType === "confined" ? "selected" : ""}>Confined (Thiem)</option>
+      </select>
+    </div>
+
+    <h2>Excavation Zones</h2>
+    <div id="dewatering-zones">${renderDewateringZoneRows()}</div>
+    <div class="toolbar"><button class="btn secondary small" id="add-dewatering-zone">+ Add Zone</button></div>
+
+    <h2>General Permit Threshold Screening</h2>
+    <p class="section-note">Optional. Thresholds are user-supplied -- confirm current SFWMD/FDEP (or other governing agency) numeric limits before relying on this. This is a screening aid, not a permit determination.</p>
+    <div class="field-row"><label>Max average flow (gpm)</label><input data-pt="maxAverageGpm" value="${d.permitThresholds.maxAverageGpm}"></div>
+    <div class="field-row"><label>Max daily pumpage (MGD)</label><input data-pt="maxDailyMgd" value="${d.permitThresholds.maxDailyMgd}"></div>
+    <div class="field-row"><label>Max duration (days)</label><input data-pt="maxDurationDays" value="${d.permitThresholds.maxDurationDays}"></div>
+
+    <h2>Settling Tank (optional)</h2>
+    <p class="section-note">Sizes against the max zone flow unless a flow override is entered.</p>
+    <div class="field-row"><label>Tank Length (ft)</label><input data-tk="lengthFt" value="${d.tank.lengthFt}"></div>
+    <div class="field-row"><label>Tank Width (ft)</label><input data-tk="widthFt" value="${d.tank.widthFt}"></div>
+    <div class="field-row"><label>Tank Depth (ft)</label><input data-tk="depthFt" value="${d.tank.depthFt}"></div>
+    <div class="field-row"><label>Override flow (gpm, optional)</label><input data-tk="flowGpmOverride" value="${d.tank.flowGpmOverride}"></div>
+    <div class="field-row"><label>Particle diameter (ft)</label><input data-tk="particleDiameterFt" value="${d.tank.particleDiameterFt}"></div>
+    <div class="field-row"><label>Specific gravity</label><input data-tk="specificGravity" value="${d.tank.specificGravity}"></div>
+
+    <div class="toolbar"><button class="btn" id="btn-run-dewatering">Calculate</button></div>
+    <div id="dewatering-results">${d.results ? "" : `<p class="muted">Run the calculation to see results.</p>`}</div>
+  `;
+
+  document.querySelectorAll("#dewatering-zones [data-zf]").forEach(inp => {
+    inp.addEventListener("change", () => {
+      const i = +inp.dataset.i, f = inp.dataset.zf;
+      d.zones[i][f] = (f === "name" || f === "description") ? inp.value : parseFloat(inp.value);
+    });
+  });
+  document.querySelectorAll("#dewatering-zones [data-remove-zone]").forEach(btn => {
+    btn.addEventListener("click", () => { d.zones.splice(+btn.dataset.removeZone, 1); renderDewateringPanel(); });
+  });
+  document.getElementById("add-dewatering-zone").addEventListener("click", () => {
+    d.zones.push({ name: `Zone ${d.zones.length + 1}`, description: "", gwElevFt: "", excBottomElevFt: "",
+      operatingMarginFt: 1.0, widthFt: "", lengthFt: "", hoursPerDay: 12, estimatedDays: 10, numberOfElements: 1 });
+    renderDewateringPanel();
+  });
+  document.querySelectorAll("[data-af]").forEach(inp => {
+    inp.addEventListener("change", () => {
+      const f = inp.dataset.af;
+      d.aquifer[f] = f === "aquiferType" ? inp.value : parseFloat(inp.value);
+    });
+  });
+  document.querySelectorAll("[data-pt]").forEach(inp => {
+    inp.addEventListener("change", () => { d.permitThresholds[inp.dataset.pt] = inp.value === "" ? "" : parseFloat(inp.value); });
+  });
+  document.querySelectorAll("[data-tk]").forEach(inp => {
+    inp.addEventListener("change", () => { d.tank[inp.dataset.tk] = inp.value === "" ? "" : parseFloat(inp.value); });
+  });
+
+  document.getElementById("btn-run-dewatering").addEventListener("click", runDewatering);
+  document.getElementById("btn-save-dewatering").addEventListener("click", saveDewateringProject);
+  document.getElementById("btn-load-dewatering").addEventListener("click", () => document.getElementById("file-load-dewatering").click());
+  document.getElementById("file-load-dewatering").addEventListener("change", (e) => {
+    if (e.target.files.length) loadDewateringProjectFromFile(e.target.files[0]);
+  });
+
+  if (d.results) renderDewateringResults(d.results);
+}
+
+function collectDewateringPayload() {
+  const d = state.dewatering;
+  return { aquifer: d.aquifer, zones: d.zones, permitThresholds: d.permitThresholds, tank: d.tank };
+}
+
+async function runDewatering() {
+  const el = document.getElementById("dewatering-results");
+  el.innerHTML = `<p class="muted">Calculating on the engine server&hellip;</p>`;
+  try {
+    const resp = await fetch("/api/dewatering/run", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(collectDewateringPayload()),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || "Unknown server error");
+    state.dewatering.results = data;
+    renderDewateringResults(data);
+  } catch (err) {
+    el.innerHTML = `<div class="callout critical"><span class="badge critical">ERROR</span> ${err.message}</div>`;
+  }
+}
+
+function renderDewateringResults(data) {
+  const el = document.getElementById("dewatering-results");
+  let html = "";
+
+  if (data.zoneErrors && data.zoneErrors.length) {
+    html += `<div class="callout critical"><span class="badge critical">ERROR</span><ul>${data.zoneErrors.map(e => `<li>${e}</li>`).join("")}</ul></div>`;
+  }
+
+  if (data.zones && data.zones.length) {
+    html += `<h2>Per-Zone Results</h2><table>
+      <tr><th>Zone</th><th class="num">Drawdown (ft)</th><th class="num">ROI (ft)</th><th class="num">Eff. Radius (ft)</th>
+        <th class="num">Flow (gpm)</th><th class="num">Daily (MGD)</th><th class="num">Total (MG)</th><th class="num">Days</th></tr>`;
+    data.zones.forEach(r => {
+      html += `<tr><td>${r.name}${r.description ? `<br><small>${r.description}</small>` : ""}</td>
+        <td class="num">${r.drawdownFt.toFixed(2)}</td><td class="num">${r.radiusOfInfluenceFt.toFixed(0)}</td>
+        <td class="num">${r.effectiveRadiusFt.toFixed(1)}</td><td class="num">${r.flowGpm.toFixed(1)}</td>
+        <td class="num">${r.dailyPumpageMgd.toFixed(4)}</td><td class="num">${r.totalPumpageMg.toFixed(2)}</td>
+        <td class="num">${r.totalDays.toFixed(1)}</td></tr>`;
+      if (r.warnings && r.warnings.length) {
+        html += `<tr><td colspan="8" style="text-align:left;background:var(--amber-bg);">${r.warnings.map(w => "&#9888; " + w).join("<br>")}</td></tr>`;
+      }
+    });
+    html += `</table>`;
+    if (data.overlapNotes && data.overlapNotes.length) {
+      html += data.overlapNotes.map(n => `<div class="callout" style="background:var(--amber-bg);border-color:var(--amber);">${n}</div>`).join("");
+    }
+  }
+
+  if (data.summary) {
+    const s = data.summary;
+    html += `<h2>Water Balance Summary</h2><table>
+      <tr><td>Average flow (gpm)</td><td class="num">${s.averageFlowGpm.toFixed(0)}</td></tr>
+      <tr><td>Max flow (gpm)</td><td class="num">${s.maxFlowGpm.toFixed(0)}</td></tr>
+      <tr><td>Max daily pumpage (MGD)</td><td class="num">${s.maxDailyPumpageMgd.toFixed(3)}</td></tr>
+      <tr><td>Total project pumpage (MG)</td><td class="num">${s.totalProjectPumpageMg.toFixed(2)}</td></tr>
+      <tr><td>Total pumping days</td><td class="num">${s.totalPumpingDays.toFixed(0)}</td></tr>
+    </table>`;
+  }
+
+  if (data.permitFlags && data.permitFlags.length) {
+    html += `<h2>General Permit Threshold Screening</h2>` +
+      data.permitFlags.map(f => `<div class="callout" style="background:var(--amber-bg);border-color:var(--amber);">${f}</div>`).join("") +
+      `<p class="section-note">Screening aid only -- not a permit determination.</p>`;
+  }
+
+  if (data.tank) {
+    const t = data.tank;
+    html += `<h2>Settling Tank Design</h2><table>
+      <tr><td>Flow used (gpm)</td><td class="num">${t.flowGpm.toFixed(1)}</td></tr>
+      <tr><td>Volume</td><td class="num">${t.volumeCf.toFixed(0)} ft&sup3; / ${t.volumeGal.toFixed(0)} gal</td></tr>
+      <tr><td>Detention time (min)</td><td class="num">${t.detentionTimeMin.toFixed(1)}</td></tr>
+      <tr><td>Mean horizontal velocity, Vm (ft/s)</td><td class="num">${t.meanHorizontalVelocityFtS.toFixed(5)}</td></tr>
+      <tr><td>Settling velocity, Vs (ft/s)</td><td class="num">${t.settlingVelocityFtS.toFixed(5)}</td></tr>
+      <tr><td>Surface overflow rate (gpd/ft&sup2;)</td><td class="num">${t.surfaceOverflowRateGpdFt2.toFixed(0)}</td></tr>
+      <tr><td>Particle Reynolds number</td><td class="num">${t.reynoldsNumber.toFixed(3)} ${t.stokesLawValid ? "(Stokes valid)" : "(Stokes NOT valid)"}</td></tr>
+      <tr><td>Vs &gt; Vm check</td><td class="num">${t.velocityCheckPass ? "PASS" : "FAIL"}</td></tr>
+    </table>`;
+    if (t.warnings && t.warnings.length) {
+      html += t.warnings.map(w => `<div class="callout" style="background:var(--amber-bg);border-color:var(--amber);">${w}</div>`).join("");
+    }
+  }
+
+  el.innerHTML = html || `<p class="muted">No results.</p>`;
+}
+
+function saveDewateringProject() {
+  const data = { schema_version: DEWATERING_FILE_SCHEMA_VERSION, ...collectDewateringPayload() };
+  const json = JSON.stringify(data, null, 2);
+  const blob = new Blob([json], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const name = slugify(document.getElementById("p-name") ? document.getElementById("p-name").value : "project");
+  const filename = name + ".dewatering.json";
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  document.getElementById("dewatering-file-status").textContent = "Saved as " + filename;
+}
+
+function loadDewateringProjectFromFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+      if (data.schema_version !== DEWATERING_FILE_SCHEMA_VERSION) {
+        const proceed = confirm(
+          `This file was saved with schema version "${data.schema_version}", ` +
+          `but this app expects "${DEWATERING_FILE_SCHEMA_VERSION}". Some fields may not load correctly. Continue?`
+        );
+        if (!proceed) return;
+      }
+      state.dewatering.aquifer = data.aquifer || state.dewatering.aquifer;
+      state.dewatering.zones = data.zones || state.dewatering.zones;
+      state.dewatering.permitThresholds = data.permitThresholds || state.dewatering.permitThresholds;
+      state.dewatering.tank = data.tank || state.dewatering.tank;
+      state.dewatering.results = null;
+      renderDewateringPanel();
+      document.getElementById("dewatering-file-status").textContent = "Opened " + file.name;
+    } catch (e) {
+      alert("Could not read this file as a dewatering project file: " + e.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
 renderBasinPanel("existing", "Existing Conditions");
 renderBasinPanel("proposed", "Proposed Conditions");
 renderStoragePanel();
 renderComparePanel();
 renderHydrographPanel();
+renderDewateringPanel();
 </script>
 </body>
 </html>

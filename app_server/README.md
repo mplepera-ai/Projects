@@ -77,3 +77,32 @@ easy place to accidentally double an increment or skip one.
 - Nothing here has been validated against real Cascade output. Treat
   all results as a working calculation tool, not a permit-ready source
   of truth, until that validation exists.
+
+## Dewatering (tab 10)
+
+A companion tool living in the same app: excavation dewatering flow
+(Sichardt radius of influence + Dupuit/Thiem radial flow), a multi-zone
+water balance, general-permit threshold screening, and settling-tank
+sizing (surface overflow rate + Stokes'-Law Reynolds-number check).
+
+- Its own engine module (`dewatering/calculations.py`), validated
+  against a real dewatering calc spreadsheet -- see
+  `dewatering/tests/test_calculations.py`.
+- Its own API route (`/api/dewatering/run`) and adapter
+  (`api/dewatering_adapter.py`), following the same "server never
+  reimplements calc logic, just shape-shifts JSON" rule as the main app.
+- Its own Save/Open file, separate from the main Project File, saved as
+  `<project-name>.dewatering.json` -- same client-side Blob/FileReader
+  pattern as the main app, own schema version
+  (`DEWATERING_FILE_SCHEMA_VERSION`).
+- Nothing is persisted server-side here either -- the server holds no
+  state between requests, matching the rest of this app.
+
+**Known limitations (v1):** no multi-well superposition (each zone is
+analyzed independently -- a warning fires when a zone's radius of
+influence is large relative to its footprint, but it's a heuristic, not
+a real superposition calc), no confined-aquifer transmissivity input
+validation beyond the basic Thiem form, no groundwater mounding/
+settlement screening, no pump sizing, no PDF/Excel export (only the
+in-page results table). See the "Dewatering Calculations -- Review &
+Software Recommendations" project doc for the fuller feature backlog.
