@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 from dewatering.calculations import (
     AquiferParams, AquiferType, Zone, compute_zone,
     summarize_water_balance, TankInputs, design_settling_tank,
+    MinTankInputs, size_minimum_settling_tank,
 )
 
 AQUIFER = AquiferParams(hydraulic_conductivity_ft_day=25, aquifer_thickness_ft=220,
@@ -81,6 +82,34 @@ def test_settling_tank_matches_spreadsheet_sheet2():
     assert abs(result.mean_horizontal_velocity_ft_s - 0.015028) / 0.015028 < 0.01
     assert abs(result.settling_velocity_ft_s - 0.024812) / 0.024812 < 0.01
     assert result.settling_velocity_ft_s > result.mean_horizontal_velocity_ft_s  # matches Excel's TRUE check
+
+
+def test_size_minimum_settling_tank_satisfies_sor_and_scour():
+    # Same flow as the Sheet2 max-flow zone (539.61 gpm), default particle.
+    inputs = MinTankInputs(flow_gpm=539.61, depth_ft=4.0, length_to_width_ratio=2.0, size_increment_ft=1.0)
+    result = size_minimum_settling_tank(inputs)
+    # Required area A_min = Q_cfs / Vs must match Q/Vs directly.
+    q_cfs = 539.61 * 0.002228009
+    expected_area = q_cfs / result.settling_velocity_ft_s
+    assert abs(result.required_surface_area_ft2 - expected_area) / expected_area < 1e-6
+    # Rounded dims must be >= the exact minimum (never undersized).
+    assert result.width_ft >= result.min_width_ft
+    assert result.length_ft >= result.min_length_ft
+    # The re-run tank result must actually pass both the SOR and scour checks
+    # at the returned dimensions -- "smallest required tank" has to be a tank
+    # that actually works, not just an area number.
+    assert result.tank.settling_velocity_ft_s >= (
+        (539.61 * 0.002228009) / (result.width_ft * result.length_ft)
+    )
+    assert result.tank.mean_horizontal_velocity_ft_s <= result.tank.settling_velocity_ft_s + 1e-9
+
+
+def test_size_minimum_settling_tank_smaller_than_oversized_manual_tank():
+    # The auto-sized tank should never be larger (by volume) than an
+    # arbitrarily oversized manually-specified tank for the same duty.
+    auto = size_minimum_settling_tank(MinTankInputs(flow_gpm=227.5566, depth_ft=4.0))
+    manual_oversized = design_settling_tank(TankInputs(flow_gpm=227.5566, length_ft=40, width_ft=20, depth_ft=10))
+    assert auto.tank.volume_cf < manual_oversized.volume_cf
 
 
 def test_zero_or_negative_drawdown_raises():
