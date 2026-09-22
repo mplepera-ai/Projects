@@ -36,11 +36,12 @@ from api.adapter import (
     run_storage_calcs, build_storage_objects, merge_swale_storage_into_basin,
     suggest_trench_options, suggest_pond_options, build_narrative_context,
 )
-from api.dewatering_adapter import run_dewatering, DewateringAdapterError
+from api.dewatering_adapter import run_dewatering, build_report_objects, DewateringAdapterError
 from reports.pdf_export import export_permit_report_pdf
 from reports.generator import permit_summary_markdown
 from reports.calc_report_pdf import export_swale_exfiltration_calc_pdf
 from reports.excel_export import export_drainage_calc_workbook
+from reports.dewatering_calc_pdf import export_dewatering_calc_pdf
 from qa.validation import run_qa
 from project.model import run_all_scenarios
 
@@ -270,6 +271,42 @@ def api_dewatering_run():
     try:
         data = request.get_json(force=True)
         return jsonify(run_dewatering(data))
+    except DewateringAdapterError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"Server error: {e}"}), 500
+
+
+@app.route("/api/dewatering/report/pdf", methods=["POST"])
+def api_dewatering_report_pdf():
+    try:
+        data = request.get_json(force=True)
+        core = build_report_objects(data)
+        if not core["zone_results"]:
+            return jsonify({"error": "Add at least one valid excavation zone before generating a report."}), 400
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            export_dewatering_calc_pdf(
+                tmp.name,
+                project_name=data.get("projectName", "Untitled Project"),
+                project_address=data.get("projectAddress", ""),
+                aquifer=core["aquifer"],
+                zone_results=core["zone_results"],
+                zone_errors=core["zone_errors"],
+                overlap_notes=core["overlap_notes"],
+                summary=core["summary"],
+                permit_flags=core["permit_flags"],
+                tank_inputs=core["tank_inputs"],
+                tank_result=core["tank_result"],
+                min_tank_result=core["min_result"],
+            )
+            tmp_path = tmp.name
+
+        response = send_file(tmp_path, mimetype="application/pdf", as_attachment=True,
+                              download_name="dewatering-calculations.pdf")
+        response.call_on_close(lambda: os.remove(tmp_path))
+        return response
     except DewateringAdapterError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:

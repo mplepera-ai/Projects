@@ -447,7 +447,9 @@ const state = {
         widthFt: "", lengthFt: "", hoursPerDay: 12, estimatedDays: 10, numberOfElements: 1 },
     ],
     permitThresholds: { maxAverageGpm: "", maxDailyMgd: "", maxDurationDays: "" },
-    tank: { lengthFt: "", widthFt: "", depthFt: "", flowGpmOverride: "", particleDiameterFt: 0.000279, specificGravity: 2.65 },
+    tank: { mode: "manual", lengthFt: "", widthFt: "", depthFt: "", flowGpmOverride: "",
+            particleDiameterFt: 0.000279, specificGravity: 2.65,
+            autoDepthFt: 4, autoLengthToWidthRatio: 2, autoSizeIncrementFt: 1, autoIncreaseDepthForScour: true },
     results: null,
   },
   storageWQ: {
@@ -2405,14 +2407,34 @@ function renderDewateringPanel() {
 
     <h2>Settling Tank (optional)</h2>
     <p class="section-note">Sizes against the max zone flow unless a flow override is entered.</p>
-    <div class="field-row"><label>Tank Length (ft)</label><input data-tk="lengthFt" value="${d.tank.lengthFt}"></div>
-    <div class="field-row"><label>Tank Width (ft)</label><input data-tk="widthFt" value="${d.tank.widthFt}"></div>
-    <div class="field-row"><label>Tank Depth (ft)</label><input data-tk="depthFt" value="${d.tank.depthFt}"></div>
+    <div class="field-row"><label>Mode</label>
+      <select data-tk="mode">
+        <option value="manual" ${(d.tank.mode || "manual") === "manual" ? "selected" : ""}>Check a tank size I enter</option>
+        <option value="auto" ${d.tank.mode === "auto" ? "selected" : ""}>Auto-size the smallest required tank</option>
+      </select>
+    </div>
     <div class="field-row"><label>Override flow (gpm, optional)</label><input data-tk="flowGpmOverride" value="${d.tank.flowGpmOverride}"></div>
     <div class="field-row"><label>Particle diameter (ft)</label><input data-tk="particleDiameterFt" value="${d.tank.particleDiameterFt}"></div>
     <div class="field-row"><label>Specific gravity</label><input data-tk="specificGravity" value="${d.tank.specificGravity}"></div>
 
-    <div class="toolbar"><button class="btn" id="btn-run-dewatering">Calculate</button></div>
+    <div id="dewatering-tank-manual-fields" style="${d.tank.mode === "auto" ? "display:none;" : ""}">
+      <div class="field-row"><label>Tank Length (ft)</label><input data-tk="lengthFt" value="${d.tank.lengthFt}"></div>
+      <div class="field-row"><label>Tank Width (ft)</label><input data-tk="widthFt" value="${d.tank.widthFt}"></div>
+      <div class="field-row"><label>Tank Depth (ft)</label><input data-tk="depthFt" value="${d.tank.depthFt}"></div>
+    </div>
+
+    <div id="dewatering-tank-auto-fields" style="${d.tank.mode === "auto" ? "" : "display:none;"}">
+      <p class="section-note">Solves the minimum plan-view surface area from A = Q / Vs (surface overflow rate &le; settling velocity), splits it into length &amp; width using the ratio below, then rounds up to buildable dimensions. Depth is checked against the horizontal-velocity (scour) criterion and increased automatically if the value below is too shallow for the resulting width.</p>
+      <div class="field-row"><label>Minimum/preferred depth (ft)</label><input data-tk="autoDepthFt" value="${d.tank.autoDepthFt ?? 4}"></div>
+      <div class="field-row"><label>Length : Width ratio</label><input data-tk="autoLengthToWidthRatio" value="${d.tank.autoLengthToWidthRatio ?? 2}"></div>
+      <div class="field-row"><label>Round dimensions up to nearest (ft)</label><input data-tk="autoSizeIncrementFt" value="${d.tank.autoSizeIncrementFt ?? 1}"></div>
+      <div class="field-row"><label><input type="checkbox" id="tk-auto-increase-depth" ${d.tank.autoIncreaseDepthForScour === false ? "" : "checked"} style="width:auto; margin-right:6px;">Auto-increase depth if needed to pass the scour check</label></div>
+    </div>
+
+    <div class="toolbar">
+      <button class="btn" id="btn-run-dewatering">Calculate</button>
+      <button class="btn secondary" id="btn-dewatering-report-pdf">Download Calculation Report (PDF)</button>
+    </div>
     <div id="dewatering-results">${d.results ? "" : `<p class="muted">Run the calculation to see results.</p>`}</div>
   `;
 
@@ -2459,10 +2481,23 @@ function renderDewateringPanel() {
     inp.addEventListener("change", () => { d.permitThresholds[inp.dataset.pt] = inp.value === "" ? "" : parseFloat(inp.value); });
   });
   document.querySelectorAll("[data-tk]").forEach(inp => {
-    inp.addEventListener("change", () => { d.tank[inp.dataset.tk] = inp.value === "" ? "" : parseFloat(inp.value); });
+    inp.addEventListener("change", () => {
+      const f = inp.dataset.tk;
+      if (f === "mode") {
+        d.tank.mode = inp.value;
+        document.getElementById("dewatering-tank-manual-fields").style.display = inp.value === "auto" ? "none" : "";
+        document.getElementById("dewatering-tank-auto-fields").style.display = inp.value === "auto" ? "" : "none";
+        return;
+      }
+      d.tank[f] = inp.value === "" ? "" : parseFloat(inp.value);
+    });
+  });
+  document.getElementById("tk-auto-increase-depth").addEventListener("change", (e) => {
+    d.tank.autoIncreaseDepthForScour = e.target.checked;
   });
 
   document.getElementById("btn-run-dewatering").addEventListener("click", runDewatering);
+  document.getElementById("btn-dewatering-report-pdf").addEventListener("click", downloadDewateringReportPdf);
   document.getElementById("btn-save-dewatering").addEventListener("click", saveDewateringProject);
   document.getElementById("btn-load-dewatering").addEventListener("click", () => document.getElementById("file-load-dewatering").click());
   document.getElementById("file-load-dewatering").addEventListener("change", (e) => {
@@ -2474,7 +2509,40 @@ function renderDewateringPanel() {
 
 function collectDewateringPayload() {
   const d = state.dewatering;
-  return { aquifer: d.aquifer, zones: d.zones, permitThresholds: d.permitThresholds, tank: d.tank };
+  return {
+    projectName: document.getElementById("p-name") ? document.getElementById("p-name").value : "",
+    projectAddress: document.getElementById("p-address") ? document.getElementById("p-address").value : "",
+    aquifer: d.aquifer, zones: d.zones, permitThresholds: d.permitThresholds, tank: d.tank,
+  };
+}
+
+async function downloadDewateringReportPdf() {
+  const btn = document.getElementById("btn-dewatering-report-pdf");
+  const originalLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Generating…";
+  try {
+    const resp = await fetch("/api/dewatering/report/pdf", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(collectDewateringPayload()),
+    });
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      throw new Error(data.error || "Unknown server error");
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const name = slugify(document.getElementById("p-name") ? document.getElementById("p-name").value : "project");
+    const a = document.createElement("a");
+    a.href = url; a.download = name + "-dewatering-calculations.pdf";
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert("Could not generate the report: " + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalLabel;
+  }
 }
 
 async function runDewatering() {
@@ -2541,8 +2609,18 @@ function renderDewateringResults(data) {
 
   if (data.tank) {
     const t = data.tank;
-    html += `<h2>Settling Tank Design</h2><table>
-      <tr><td>Flow used (gpm)</td><td class="num">${t.flowGpm.toFixed(1)}</td></tr>
+    const heading = t.mode === "auto" ? "Settling Tank Design -- Smallest Required Tank" : "Settling Tank Design";
+    html += `<h2>${heading}</h2>`;
+    if (t.mode === "auto") {
+      html += `<table>
+        <tr><td>Flow used (gpm)</td><td class="num">${t.flowGpm.toFixed(1)}</td></tr>
+        <tr><td>Required surface area, A_min = Q/Vs (ft&sup2;)</td><td class="num">${t.requiredSurfaceAreaFt2.toFixed(1)}</td></tr>
+        <tr><td>Exact minimum L &times; W (ft)</td><td class="num">${t.minLengthFt.toFixed(2)} &times; ${t.minWidthFt.toFixed(2)}</td></tr>
+        <tr><td><b>Smallest required tank (L &times; W &times; D, ft)</b></td><td class="num"><b>${t.lengthFt.toFixed(1)} &times; ${t.widthFt.toFixed(1)} &times; ${t.depthFt.toFixed(1)}</b></td></tr>
+        <tr><td>Requested depth (ft)</td><td class="num">${t.requestedDepthFt.toFixed(1)}${t.depthWasIncreased ? " (increased for scour check)" : ""}</td></tr>
+      </table>`;
+    }
+    html += `<table>
       <tr><td>Volume</td><td class="num">${t.volumeCf.toFixed(0)} ft&sup3; / ${t.volumeGal.toFixed(0)} gal</td></tr>
       <tr><td>Detention time (min)</td><td class="num">${t.detentionTimeMin.toFixed(1)}</td></tr>
       <tr><td>Mean horizontal velocity, Vm (ft/s)</td><td class="num">${t.meanHorizontalVelocityFtS.toFixed(5)}</td></tr>

@@ -88,21 +88,40 @@ sizing (surface overflow rate + Stokes'-Law Reynolds-number check).
 - Its own engine module (`dewatering/calculations.py`), validated
   against a real dewatering calc spreadsheet -- see
   `dewatering/tests/test_calculations.py`.
-- Its own API route (`/api/dewatering/run`) and adapter
-  (`api/dewatering_adapter.py`), following the same "server never
-  reimplements calc logic, just shape-shifts JSON" rule as the main app.
+- Its own API routes (`/api/dewatering/run`, `/api/dewatering/report/pdf`)
+  and adapter (`api/dewatering_adapter.py`), following the same "server
+  never reimplements calc logic, just shape-shifts JSON" rule as the
+  main app.
 - Its own Save/Open file, separate from the main Project File, saved as
   `<project-name>.dewatering.json` -- same client-side Blob/FileReader
   pattern as the main app, own schema version
   (`DEWATERING_FILE_SCHEMA_VERSION`).
 - Nothing is persisted server-side here either -- the server holds no
   state between requests, matching the rest of this app.
+- Settling tank has two modes: check a tank size you enter, or
+  auto-size the smallest tank that satisfies both the surface-overflow-
+  rate (capture) criterion and the horizontal-velocity (scour)
+  criterion (`size_minimum_settling_tank()` in
+  `dewatering/calculations.py`) -- solves the minimum plan-view area
+  from A = Q/Vs, splits it by a length:width ratio, rounds up to
+  buildable dimensions, and increases depth automatically if the
+  requested depth is too shallow for the resulting width to pass the
+  scour check.
+- "Download Calculation Report (PDF)" (`reports/dewatering_calc_pdf.py`)
+  produces a backup-calculations sheet showing every formula (Sichardt
+  ROI, Dupuit-Forchheimer/Thiem flow, water balance, Stokes' Law /
+  SOR tank sizing) with the project's actual numbers substituted in,
+  per zone -- for review or permit-submittal backup, matching the style
+  of the existing swale/exfiltration calc-PDF report.
 
 **Known limitations (v1):** no multi-well superposition (each zone is
 analyzed independently -- a warning fires when a zone's radius of
 influence is large relative to its footprint, but it's a heuristic, not
 a real superposition calc), no confined-aquifer transmissivity input
 validation beyond the basic Thiem form, no groundwater mounding/
-settlement screening, no pump sizing, no PDF/Excel export (only the
-in-page results table). See the "Dewatering Calculations -- Review &
-Software Recommendations" project doc for the fuller feature backlog.
+settlement screening, no pump sizing, no Excel export, no
+disposal/injection-well capacity calculation (only the extraction/
+excavation side is modeled), no filter-sock/silt-sock sizing (only
+gravity settling-tank sizing via Stokes'/SOR). See the "Dewatering
+Calculations -- Review & Software Recommendations" project doc for the
+fuller feature backlog.
