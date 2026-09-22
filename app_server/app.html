@@ -2359,6 +2359,17 @@ function renderDewateringPanel() {
 
     <h2>Aquifer Parameters</h2>
     <div class="field-row"><label>Hydraulic Conductivity, K (ft/day)</label><input data-af="kFtDay" value="${d.aquifer.kFtDay}"></div>
+
+    <div class="card" style="background:var(--paper); border:1px dashed var(--line); padding:10px 14px; margin:6px 0 16px;">
+      <div style="font-size:12.5px; font-weight:600; margin-bottom:4px;">Convert from a field/lab test value</div>
+      <p class="section-note" style="margin-top:0;">Some geotechnical reports only give K as c.f.s. per square foot (of seepage area) per foot (of head) -- that's the same quantity as ft/day, just expressed as a velocity instead. 1 cfs/ft&sup2;/ft-head &times; 86,400 = ft/day.</p>
+      <div class="field-row" style="max-width:320px;"><label>K, field test (cfs/ft&sup2;/ft head)</label>
+        <input type="text" id="k-convert-input" placeholder="e.g. 7.39e-5">
+      </div>
+      <p style="margin:6px 0;">= <span id="k-convert-result" style="font-weight:600;">--</span> ft/day</p>
+      <button type="button" class="btn secondary small" id="k-convert-apply">Use this value for K above</button>
+    </div>
+
     <div class="field-row"><label>Aquifer Thickness, H (ft)</label><input data-af="aquiferThicknessFt" value="${d.aquifer.aquiferThicknessFt}"></div>
     <div class="field-row"><label>Aquifer Type</label>
       <select data-af="aquiferType">
@@ -2409,6 +2420,25 @@ function renderDewateringPanel() {
       const f = inp.dataset.af;
       d.aquifer[f] = f === "aquiferType" ? inp.value : parseFloat(inp.value);
     });
+  });
+
+  // K unit conversion helper: cfs/ft^2 per ft of head (a velocity, same as
+  // ft/s) -> ft/day, for geotechnical reports that only give the field-test
+  // value in that form. 1 cfs/ft^2/ft-head = 1 ft/s = 86,400 ft/day.
+  const kConvertInput = document.getElementById("k-convert-input");
+  const kConvertResult = document.getElementById("k-convert-result");
+  kConvertInput.addEventListener("input", () => {
+    const cfsPerFt2PerFtHead = parseFloat(kConvertInput.value);
+    if (isNaN(cfsPerFt2PerFtHead)) { kConvertResult.textContent = "--"; return; }
+    const ftPerDay = cfsPerFt2PerFtHead * 86400;
+    kConvertResult.textContent = ftPerDay.toPrecision(4);
+  });
+  document.getElementById("k-convert-apply").addEventListener("click", () => {
+    const cfsPerFt2PerFtHead = parseFloat(kConvertInput.value);
+    if (isNaN(cfsPerFt2PerFtHead)) return;
+    const ftPerDay = cfsPerFt2PerFtHead * 86400;
+    d.aquifer.kFtDay = ftPerDay;
+    document.querySelector('[data-af="kFtDay"]').value = ftPerDay.toPrecision(4);
   });
   document.querySelectorAll("[data-pt]").forEach(inp => {
     inp.addEventListener("change", () => { d.permitThresholds[inp.dataset.pt] = inp.value === "" ? "" : parseFloat(inp.value); });
