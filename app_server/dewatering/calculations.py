@@ -409,7 +409,14 @@ def design_settling_tank(inputs: TankInputs) -> TankResult:
             "Settling velocity is less than the surface overflow rate — particles of this size "
             "are not reliably captured; increase surface area (length x width) rather than depth."
         )
-    if velocity_pass and vs < 2 * vm:
+    if not velocity_pass:
+        warnings.append(
+            "Mean horizontal (flow-through) velocity exceeds the settling velocity — "
+            "particles that settle are likely to be resuspended (scoured) before reaching "
+            "the outlet; increase the cross-sectional area (width x depth) to slow the "
+            "flow-through velocity."
+        )
+    elif vs < 2 * vm:
         warnings.append(
             "Settling velocity exceeds mean horizontal velocity by less than 2x — "
             "little margin against resuspension/scour; consider a larger cross-section "
@@ -426,5 +433,154 @@ def design_settling_tank(inputs: TankInputs) -> TankResult:
         reynolds_number=re,
         stokes_law_valid=stokes_valid,
         velocity_check_pass=velocity_pass,
+        warnings=warnings,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Minimum settling-tank sizing (smallest tank that satisfies SOR <= Vs)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class MinTankInputs:
+    flow_gpm: float
+    depth_ft: float = 4.0                      # minimum/preferred water depth (user choice)
+    length_to_width_ratio: float = 2.0          # L:W, typical baffled-tank practice is 2:1-4:1
+    size_increment_ft: float = 1.0              # round L and W up to this increment (buildable dims)
+    auto_increase_depth_for_scour: bool = True  # bump depth_ft up if needed to pass the scour check
+    particle_diameter_ft: float = 0.000279
+    specific_gravity: float = 2.65
+    gravity_ft_s2: float = 32.2
+    kinematic_viscosity_ft2_s: float = 9.26e-6
+
+
+@dataclass
+class MinTankResult:
+    settling_velocity_ft_s: float
+    reynolds_number: float
+    stokes_law_valid: bool
+    required_surface_area_ft2: float       # A_min = Q / Vs, exact (unrounded)
+    min_width_ft: float                    # exact, before rounding up
+    min_length_ft: float                   # exact, before rounding up
+    width_ft: float                        # practical (rounded up to size_increment_ft)
+    length_ft: float                       # practical (rounded up to size_increment_ft)
+    depth_ft: float                        # final depth actually used (see depth_was_increased)
+    requested_depth_ft: float
+    depth_was_increased: bool
+    min_depth_for_scour_ft: float          # smallest depth, at width_ft, that keeps Vm <= Vs
+    tank: TankResult                       # design_settling_tank() re-run on the rounded L/W/depth
+    warnings: list = field(default_factory=list)
+
+
+def _round_up_to_increment(value: float, increment: float) -> float:
+    if increment <= 0:
+        return value
+    return math.ceil(value / increment) * increment
+
+
+def size_minimum_settling_tank(inputs: MinTankInputs) -> MinTankResult:
+    """
+    Sizes the smallest rectangular settling tank (plan-view surface area)
+    that satisfies the Type-1 discrete-settling design criterion:
+
+        SOR = Q / A  <=  Vs        =>      A_min = Q / Vs
+
+    i.e. the surface overflow rate must not exceed the target particle's
+    Stokes settling velocity. This is the same governing inequality
+    design_settling_tank() checks after the fact (sor_pass) -- here it is
+    solved directly for the minimum surface area, which is then split into
+    length/width using the requested L:W aspect ratio and rounded up to a
+    buildable increment. Depth does not affect the SOR criterion (surface
+    loading is independent of depth for discrete settling); depth is a
+    separate design choice governing detention time and horizontal (scour)
+    velocity, so it stays a direct input here rather than being solved for.
+    """
+    warnings = []
+
+    vs = stokes_settling_velocity_ft_s(
+        inputs.particle_diameter_ft, inputs.specific_gravity,
+        inputs.gravity_ft_s2, inputs.kinematic_viscosity_ft2_s
+    )
+    re = particle_reynolds_number(vs, inputs.particle_diameter_ft, inputs.kinematic_viscosity_ft2_s)
+    stokes_valid = re < 1.0
+    if not stokes_valid:
+        warnings.append(
+            f"Particle Reynolds number ({re:.2f}) is outside the laminar range (Re < 1) where "
+            f"Stokes' Law applies — the sizing below is likely non-conservative; use a "
+            f"transitional/Newton's-law correlation for this particle size instead."
+        )
+    if inputs.particle_diameter_ft < CLAY_PARTICLE_DIAMETER_FT * 2:
+        warnings.append(
+            "Design particle diameter is in/near the clay-size range — discrete (Type 1) "
+            "settling theory (and this sizing) does not reliably apply; clay-size fines "
+            "generally require flocculation/coagulation or a filter bag/sock, not a larger "
+            "gravity tank."
+        )
+
+    q_cfs = inputs.flow_gpm * 0.002228009
+    if vs <= 0:
+        raise ValueError("Settling velocity must be positive to size a tank")
+    a_min_ft2 = q_cfs / vs
+
+    ratio = inputs.length_to_width_ratio if inputs.length_to_width_ratio > 0 else 1.0
+    # A = L*W = ratio*W^2  =>  W = sqrt(A/ratio)
+    min_width_ft = math.sqrt(a_min_ft2 / ratio)
+    min_length_ft = ratio * min_width_ft
+
+    width_ft = _round_up_to_increment(min_width_ft, inputs.size_increment_ft)
+    length_ft = _round_up_to_increment(min_length_ft, inputs.size_increment_ft)
+    requested_depth_ft = inputs.depth_ft
+
+    # Scour check, independent of the SOR/area sizing above: Vm = Q / (W*D)
+    # must stay <= Vs, so at the chosen (rounded) width there is a minimum
+    # depth. Surfaced separately so the caller can see whether the supplied
+    # depth_ft is actually adequate, not just guess from the pass/fail flag.
+    min_depth_for_scour_ft = q_cfs / (width_ft * vs) if width_ft > 0 else 0.0
+    depth_was_increased = False
+    if requested_depth_ft < min_depth_for_scour_ft:
+        if inputs.auto_increase_depth_for_scour:
+            depth_ft = _round_up_to_increment(min_depth_for_scour_ft, inputs.size_increment_ft)
+            depth_was_increased = True
+            warnings.append(
+                f"Depth increased from the requested {requested_depth_ft:.1f} ft to {depth_ft:.1f} ft "
+                f"at this width ({width_ft:.1f} ft) to keep the mean horizontal velocity at or below "
+                f"the settling velocity (scour check)."
+            )
+        else:
+            depth_ft = requested_depth_ft
+            warnings.append(
+                f"At this width ({width_ft:.1f} ft), a depth of at least "
+                f"{min_depth_for_scour_ft:.2f} ft is needed to keep the mean horizontal velocity "
+                f"at or below the settling velocity (scour check); {depth_ft:.1f} ft was supplied "
+                f"and auto-increase is off."
+            )
+    else:
+        depth_ft = requested_depth_ft
+
+    tank_result = design_settling_tank(TankInputs(
+        flow_gpm=inputs.flow_gpm,
+        length_ft=length_ft,
+        width_ft=width_ft,
+        depth_ft=depth_ft,
+        particle_diameter_ft=inputs.particle_diameter_ft,
+        specific_gravity=inputs.specific_gravity,
+        gravity_ft_s2=inputs.gravity_ft_s2,
+        kinematic_viscosity_ft2_s=inputs.kinematic_viscosity_ft2_s,
+    ))
+
+    return MinTankResult(
+        settling_velocity_ft_s=vs,
+        reynolds_number=re,
+        stokes_law_valid=stokes_valid,
+        required_surface_area_ft2=a_min_ft2,
+        min_width_ft=min_width_ft,
+        min_length_ft=min_length_ft,
+        width_ft=width_ft,
+        length_ft=length_ft,
+        depth_ft=depth_ft,
+        requested_depth_ft=requested_depth_ft,
+        depth_was_increased=depth_was_increased,
+        min_depth_for_scour_ft=min_depth_for_scour_ft,
+        tank=tank_result,
         warnings=warnings,
     )
