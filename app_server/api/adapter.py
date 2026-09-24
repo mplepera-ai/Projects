@@ -412,6 +412,7 @@ def build_storage_objects(data: Dict[str, Any]):
                 dry_detention_credit_ac_in=float(wq_data.get("dryDetentionCreditAcIn", 0.0) or 0.0),
                 retention_credit_ac_in=float(wq_data.get("retentionCreditAcIn", 0.0) or 0.0),
                 pretreatment_volume_ac_in=float(wq_data.get("pretreatmentVolumeAcIn", 0.0) or 0.0),
+                impervious_multiplier_in=float(wq_data.get("imperviousMultiplierIn", 2.5) or 2.5),
             )
             wq_result = calculate_legacy_volumetric(inputs, float(wq_data.get("providedVolumeAcIn", 0.0) or 0.0))
         wq_required_cuft = wq_result.net_required_volume_ac_in * 3630.0
@@ -547,6 +548,13 @@ def build_narrative_context(data: Dict[str, Any]) -> Dict[str, Any]:
 
     if objs["wq_result"] is not None:
         ctx["wqRequiredAcFt"] = objs["wq_result"].net_required_volume_ac_in / 12.0
+        # Only the legacy volumetric method carries this attribute
+        # (custom-method results don't) -- the narrative's Water Quality
+        # paragraph uses it so the boilerplate always states the actual
+        # multiplier applied on this project, not an assumed 2.5 in.
+        multiplier = getattr(objs["wq_result"], "impervious_multiplier_in", None)
+        if multiplier is not None:
+            ctx["wqImperviousMultiplierIn"] = multiplier
 
     if site_acres:
         ctx["pretreatmentRequiredAcFt"] = 0.5 / 12.0 * site_acres
