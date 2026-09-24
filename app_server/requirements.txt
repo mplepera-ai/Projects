@@ -1,5 +1,0 @@
-flask
-reportlab
-openpyxl
-gunicorn
-matplotlib
